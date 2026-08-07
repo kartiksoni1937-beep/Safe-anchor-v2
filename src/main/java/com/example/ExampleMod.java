@@ -11,7 +11,5 @@ public class ExampleMod implements ModInitializer {
     @Override
     public void onInitialize() {
         LOGGER.info("Initializing Auto Safe Anchor Mod!");
-        new AutoSafeAnchorModule().register();
     }
 }
-
