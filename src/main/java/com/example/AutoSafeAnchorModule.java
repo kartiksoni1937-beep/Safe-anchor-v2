@@ -1,4 +1,4 @@
-package com.example.safeanchor.module;
+package com.example;
 
 import net.fabricmc.fabric.api.client.rendering.v1.HudRenderCallback;
 import net.minecraft.block.Blocks;
@@ -24,24 +24,18 @@ public class AutoSafeAnchorModule {
 
     private final MinecraftClient client = MinecraftClient.getInstance();
 
-    // Configuration Settings
-    private static final double ENEMY_REACH_BLOCKS = 8.0; // 8-block reach check
-    private static final long SUB_TICK_COOLDOWN_MS = 10;   // ~0.2 ticks (10ms execution)
+    private static final double ENEMY_REACH_BLOCKS = 8.0;
+    private static final long SUB_TICK_COOLDOWN_MS = 10;
     
     private long lastExecutionMs = 0;
-    private boolean enabled = false;
+    private boolean enabled = true;
 
     public void register() {
-        // Render hook for frame-perfect, sub-tick execution
         HudRenderCallback.EVENT.register(this::onRenderFrame);
     }
 
     public void setEnabled(boolean enabled) {
         this.enabled = enabled;
-    }
-
-    public boolean isEnabled() {
-        return enabled;
     }
 
     private void onRenderFrame(DrawContext drawContext, RenderTickCounter tickCounter) {
@@ -50,22 +44,16 @@ public class AutoSafeAnchorModule {
         long now = System.currentTimeMillis();
         if (now - lastExecutionMs < SUB_TICK_COOLDOWN_MS) return;
 
-        // 1. Scan for nearest target player within 8 blocks
         PlayerEntity targetEnemy = findNearestEnemy(ENEMY_REACH_BLOCKS);
         if (targetEnemy == null) return;
 
-        // 2. Find optimal anchor spot near enemy feet
         BlockPos anchorPos = findAnchorPosNearEnemy(targetEnemy);
         if (anchorPos == null) return;
 
-        // 3. Execute ultra-fast auto anchor sequence
         executeSubTickAnchorSequence(anchorPos);
         lastExecutionMs = now;
     }
 
-    /**
-     * Finds the nearest living enemy player within range.
-     */
     private PlayerEntity findNearestEnemy(double maxRange) {
         PlayerEntity nearest = null;
         double closestDistSq = maxRange * maxRange;
@@ -82,9 +70,6 @@ public class AutoSafeAnchorModule {
         return nearest;
     }
 
-    /**
-     * Calculates valid placement position adjacent to enemy feet.
-     */
     private BlockPos findAnchorPosNearEnemy(PlayerEntity enemy) {
         BlockPos enemyFeetPos = enemy.getBlockPos();
         BlockPos[] candidates = new BlockPos[]{
@@ -95,7 +80,6 @@ public class AutoSafeAnchorModule {
 
         for (BlockPos pos : candidates) {
             var state = client.world.getBlockState(pos);
-            // Valid if block is already an Anchor or air space with solid block beneath
             if (state.isOf(Blocks.RESPAWN_ANCHOR)) {
                 return pos;
             }
@@ -106,70 +90,54 @@ public class AutoSafeAnchorModule {
         return null;
     }
 
-    /**
-     * Executes Sub-Tick Packet Sequence:
-     * Place Anchor -> Charge with Glowstone -> Shield with Glowstone -> Detonate with Totem
-     */
     private void executeSubTickAnchorSequence(BlockPos anchorPos) {
         ClientPlayerEntity player = client.player;
         ClientPlayNetworkHandler networkHandler = client.getNetworkHandler();
         if (player == null || networkHandler == null) return;
 
-        // Hotbar items search
         int anchorSlot = findHotbarSlot(Items.RESPAWN_ANCHOR);
         int glowstoneSlot = findHotbarSlot(Items.GLOWSTONE);
-        int totemSlot = findHotbarSlot(Items.TOTEM_OF_UNDYING); // Must detonate with Totem
+        int totemSlot = findHotbarSlot(Items.TOTEM_OF_UNDYING);
 
-        // Require Anchor, Glowstone, and Totem in hotbar
         if (anchorSlot == -1 || glowstoneSlot == -1 || totemSlot == -1) return;
 
-        // Calculate Glowstone shield position between player feet & anchor
         BlockPos shieldPos = calculateShieldBlockPos(player.getPos(), anchorPos);
         int originalSlot = player.getInventory().selectedSlot;
 
-        // --- STEP 1: PLACE ANCHOR ---
+        // Step 1: Place Anchor
         if (client.world.getBlockState(anchorPos).isAir()) {
             sendSilentRotation(networkHandler, player.getEyePos(), anchorPos);
             networkHandler.sendPacket(new UpdateSelectedSlotC2SPacket(anchorSlot));
             sendBlockInteractPacket(networkHandler, anchorPos, Direction.UP);
         }
 
-        // --- STEP 2: CHARGE ANCHOR (GLOWSTONE) ---
+        // Step 2: Charge Anchor with Glowstone
         sendSilentRotation(networkHandler, player.getEyePos(), anchorPos);
         networkHandler.sendPacket(new UpdateSelectedSlotC2SPacket(glowstoneSlot));
         sendBlockInteractPacket(networkHandler, anchorPos, Direction.UP);
 
-        // --- STEP 3: PLACE SHIELD BLOCK (STRICTLY GLOWSTONE) ---
+        // Step 3: Place Shield Block with Glowstone
         if (client.world.getBlockState(shieldPos).isAir() && !shieldPos.equals(anchorPos)) {
             sendSilentRotation(networkHandler, player.getEyePos(), shieldPos);
-            networkHandler.sendPacket(new UpdateSelectedSlotC2SPacket(glowstoneSlot)); // Swaps to Glowstone
+            networkHandler.sendPacket(new UpdateSelectedSlotC2SPacket(glowstoneSlot));
             sendBlockInteractPacket(networkHandler, shieldPos, Direction.UP);
         }
 
-        // --- STEP 4: DETONATE ANCHOR (STRICTLY TOTEM OF UNDYING) ---
+        // Step 4: Detonate Anchor using Totem of Undying
         sendSilentRotation(networkHandler, player.getEyePos(), anchorPos);
-        networkHandler.sendPacket(new UpdateSelectedSlotC2SPacket(totemSlot)); // Swaps to Totem
+        networkHandler.sendPacket(new UpdateSelectedSlotC2SPacket(totemSlot));
         sendBlockInteractPacket(networkHandler, anchorPos, Direction.UP);
 
-        // Restore original hotbar slot
         networkHandler.sendPacket(new UpdateSelectedSlotC2SPacket(originalSlot));
     }
 
-    /**
-     * Calculates the vector intersection block for the Glowstone shield.
-     */
     private BlockPos calculateShieldBlockPos(Vec3d playerPos, BlockPos anchorPos) {
         Vec3d anchorVec = Vec3d.ofCenter(anchorPos);
         Vec3d dir = playerPos.subtract(anchorVec).normalize();
-        
-        // Place shield 1 block offset towards player on horizontal plane
         Vec3d shieldVec = anchorVec.add(dir.x, 0, dir.z);
         return BlockPos.ofFloored(shieldVec);
     }
 
-    /**
-     * Silent server-side rotation spoofing.
-     */
     private void sendSilentRotation(ClientPlayNetworkHandler handler, Vec3d eyePos, BlockPos targetPos) {
         Vec3d targetVec = Vec3d.ofCenter(targetPos);
         double dx = targetVec.x - eyePos.x;
@@ -196,4 +164,5 @@ public class AutoSafeAnchorModule {
         }
         return -1;
     }
-}
+            }
+                                         
