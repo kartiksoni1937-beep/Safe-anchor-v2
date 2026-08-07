@@ -1,9 +1,9 @@
-package com.example.mixin;
+package com.example;
 
-import net.minecraft.server.MinecraftServer;
-import org.spongepowered.asm.mixin.Mixin;
+import net.fabricmc.api.ModInitializer;
 
-@Mixin(MinecraftServer.class)
-public class ExampleMixin {
-    // Left empty on purpose so Gradle never throws a Mixin mapping error
+public class ExampleMod implements ModInitializer {
+    @Override
+    public void onInitialize() {
+    }
 }
