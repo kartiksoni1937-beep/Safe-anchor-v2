@@ -1,4 +1,4 @@
-package com.example;
+package com.example.client;
 
 import net.fabricmc.fabric.api.client.rendering.v1.HudRenderCallback;
 import net.minecraft.block.Blocks;
@@ -164,4 +164,4 @@ public class AutoSafeAnchorModule {
         }
         return -1;
     }
-}
+    }
