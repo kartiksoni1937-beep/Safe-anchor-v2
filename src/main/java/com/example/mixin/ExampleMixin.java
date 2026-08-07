@@ -1,15 +1,15 @@
 package com.example.mixin;
 
-import net.minecraft.server.MinecraftServer;
+import net.minecraft.client.gui.screen.TitleScreen;
 import org.spongepowered.asm.mixin.Mixin;
 import org.spongepowered.asm.mixin.injection.At;
 import org.spongepowered.asm.mixin.injection.Inject;
 import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
 
-@Mixin(MinecraftServer.class)
+@Mixin(TitleScreen.class)
 public class ExampleMixin {
-	@Inject(at = @At("HEAD"), method = "loadLevel")
-	private void init(CallbackInfo info) {
-		// This code is injected into the start of MinecraftServer.loadLevel()V
-	}
+    @Inject(at = @At("HEAD"), method = "init()V")
+    private void init(CallbackInfo info) {
+        // Boilerplate mixin
+    }
 }
