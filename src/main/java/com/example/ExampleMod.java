@@ -1,15 +1,9 @@
-package com.example;
+package com.example.mixin;
 
-import net.fabricmc.api.ModInitializer;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
+import net.minecraft.server.MinecraftServer;
+import org.spongepowered.asm.mixin.Mixin;
 
-public class ExampleMod implements ModInitializer {
-    public static final String MOD_ID = "examplemod";
-    public static final Logger LOGGER = LoggerFactory.getLogger(MOD_ID);
-
-    @Override
-    public void onInitialize() {
-        LOGGER.info("Initializing Auto Safe Anchor Mod!");
-    }
+@Mixin(MinecraftServer.class)
+public class ExampleMixin {
+    // Left empty on purpose so Gradle never throws a Mixin mapping error
 }
