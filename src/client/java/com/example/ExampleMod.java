@@ -12,6 +12,7 @@ import net.minecraft.entity.ItemEntity;
 import net.minecraft.entity.player.PlayerInventory;
 import net.minecraft.item.Items;
 import net.minecraft.network.packet.c2s.play.PlayerMoveC2SPacket;
+import net.minecraft.util.ActionResult;
 import net.minecraft.util.Hand;
 import net.minecraft.util.hit.BlockHitResult;
 import net.minecraft.util.hit.HitResult;
@@ -19,13 +20,14 @@ import net.minecraft.util.math.BlockPos;
 import net.minecraft.util.math.Box;
 import net.minecraft.util.math.Direction;
 import net.minecraft.util.math.Vec3d;
+import org.lwjgl.glfw.GLFW;
 
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.List;
 
 /**
- * Converted from the C++ JNI SafeAnchorV3Module implementation[span_1](start_span)[span_1](end_span).
+ * SafeAnchorV3Module translated to Java with Z-key toggle support[span_1](start_span)[span_1](end_span).
  */
 public class SafeAnchorV3Module {
 
@@ -60,19 +62,15 @@ public class SafeAnchorV3Module {
     private int anchorX_, anchorY_, anchorZ_;
     private int protectX_, protectY_, protectZ_;
 
-    // Module Settings placeholders
+    // Settings
     private int switchDelay_ = 0;
     private int explosionSlot_ = 1;
-    private int range_ = 40; // 4.0 blocks scaled
+    private int range_ = 40; 
     private boolean silentRotations_ = true;
     private boolean smoothRotations_ = true;
     private int rotationSpeed_ = 180;
     private boolean useEasing_ = true;
     private int easingStrength_ = 2;
-
-    public SafeAnchorV3Module() {
-        // Module("SafeAnchorV3", "Combat", 'V')
-    }
 
     public void resetState() {
         active_ = false;
@@ -166,11 +164,6 @@ public class SafeAnchorV3Module {
         return replaceable;
     }
 
-    private boolean safeAnchorV3SamePos(BlockPos pos, int x, int y, int z) {
-        if (pos == null) return false;
-        return pos.getX() == x && pos.getY() == y && pos.getZ() == z;
-    }
-
     private boolean safeAnchorV3EntityBlocked(MinecraftClient client, ClientWorld world, int x, int y, int z) {
         if (client == null || world == null) return false;
         Box box = new Box(x + 0.01, y + 0.01, z + 0.01, x + 0.99, y + 0.99, z + 0.99);
@@ -228,7 +221,6 @@ public class SafeAnchorV3Module {
     private int chargeAt(ClientWorld world, BlockPos pos) {
         BlockState state = world.getBlockState(pos);
         if (state.isOf(Blocks.RESPAWN_ANCHOR)) {
-            // Retrieve charges property value safely depending on mapping
             return state.get(net.minecraft.block.RespawnAnchorBlock.CHARGES);
         }
         return -1;
@@ -254,13 +246,12 @@ public class SafeAnchorV3Module {
             double py = y + 0.5 + offset[1] * 0.5;
             double pz = z + 0.5 + offset[2] * 0.5;
 
-            Vec3d point = new Vec3d(px, py, pz);
             if (aimOut != null && aimOut.length >= 3) {
                 aimOut[0] = px;
                 aimOut[1] = py;
                 aimOut[2] = pz;
             }
-            return new BlockHitResult(point, faces[i], support, false);
+            return new BlockHitResult(new Vec3d(px, py, pz), faces[i], support, false);
         }
         return null;
     }
@@ -283,6 +274,16 @@ public class SafeAnchorV3Module {
             return true;
         }
         return false;
+    }
+
+    private boolean targetingBlock(MinecraftClient client) {
+        return client.crosshairTarget != null && client.crosshairTarget.getType() == HitResult.Type.BLOCK;
+    }
+
+    private boolean useHit(MinecraftClient client, BlockHitResult hit) {
+        if (client.interactionManager == null || client.player == null) return false;
+        ActionResult result = client.interactionManager.interactBlock(client.player, Hand.MAIN_HAND, hit);
+        return result.isAccepted();
     }
 
     public boolean acquireProtectionPosition(MinecraftClient client, ClientPlayerEntity player, ClientWorld world) {
@@ -356,6 +357,7 @@ public class SafeAnchorV3Module {
     }
 
     public boolean acquirePositions(MinecraftClient client, ClientPlayerEntity player, ClientWorld world) {
+        if (!targetingBlock(client)) return false;
         HitResult hit = client.crosshairTarget;
         if (!(hit instanceof BlockHitResult blockHit)) return false;
 
@@ -382,7 +384,7 @@ public class SafeAnchorV3Module {
         double cz = anchorZ_ + 0.5;
         double distance = Math.sqrt((px - cx) * (px - cx) + (py - cy) * (py - cy) + (pz - cz) * (pz - cz));
 
-        if (distance > range_.load() / 10.0) {
+        if (distance > range_ / 10.0) {
             return false;
         }
 
@@ -485,9 +487,4 @@ public class SafeAnchorV3Module {
         double dx = focusX - eye.getX();
         double dy = focusY - eye.getY();
         double dz = focusZ - eye.getZ();
-        double horizontal = Math.sqrt(dx * dx + dz * dz);
-
-        targetYaw_ = (float) (Math.atan2(dz, dx) * 180.0 / Math.PI - 90.0);
-        targetPitch_ = (float) (-Math.atan2(dy, horizontal) * 180.0 / Math.PI);
-
-        
+        double horizontal = Math.sqrt(dx * dx + 
