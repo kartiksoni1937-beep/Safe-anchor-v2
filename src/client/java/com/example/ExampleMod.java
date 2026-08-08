@@ -30,6 +30,7 @@ public class ExampleMod implements ClientModInitializer {
     private static final int MAX_REACH_SQUARED = 81;
 
     private KeyBinding toggleKey;
+    private KeyBinding alternateToggleKey;
     private boolean active;
     private int step = -1;
     private int originalSlot;
@@ -39,12 +40,20 @@ public class ExampleMod implements ClientModInitializer {
 
     @Override
     public void onInitializeClient() {
-        LOGGER.info("Auto Safe Anchor initialized");
+        LOGGER.info("Auto Safe Anchor initialized - toggle keys: Z / X");
 
         toggleKey = KeyBindingHelper.registerKeyBinding(new KeyBinding(
                 "key.examplemod.toggle_anchor",
                 InputUtil.Type.KEYSYM,
                 GLFW.GLFW_KEY_Z,
+                "category.examplemod.general"
+        ));
+
+        // X is a secondary toggle so the module remains easy to activate if Z is already bound.
+        alternateToggleKey = KeyBindingHelper.registerKeyBinding(new KeyBinding(
+                "key.examplemod.toggle_anchor_alt",
+                InputUtil.Type.KEYSYM,
+                GLFW.GLFW_KEY_X,
                 "category.examplemod.general"
         ));
 
@@ -55,12 +64,14 @@ public class ExampleMod implements ClientModInitializer {
             drawContext.drawText(client.textRenderer,
                     Text.literal("§6[AutoSafeAnchor] §f" + (active ? "§aENABLED" : "§cDISABLED")),
                     10, 10, 0xFFFFFFFF, true);
+            drawContext.drawText(client.textRenderer,
+                    Text.literal("§7Toggle: Z / X"), 10, 22, 0xFFFFFFFF, true);
             if (active) {
                 drawContext.drawText(client.textRenderer,
-                        Text.literal("§6Target: §f" + targetName), 10, 22, 0xFFFFFFFF, true);
+                        Text.literal("§6Target: §f" + targetName), 10, 34, 0xFFFFFFFF, true);
                 drawContext.drawText(client.textRenderer,
                         Text.literal("§6Step: §e" + (step < 0 ? "Idle" : step)),
-                        10, 34, 0xFFFFFFFF, true);
+                        10, 46, 0xFFFFFFFF, true);
             }
         });
 
@@ -68,8 +79,13 @@ public class ExampleMod implements ClientModInitializer {
     }
 
     private void onTick(MinecraftClient client) {
-        while (toggleKey.wasPressed()) {
+        boolean toggle = false;
+        while (toggleKey.wasPressed()) toggle = true;
+        while (alternateToggleKey.wasPressed()) toggle = true;
+
+        if (toggle) {
             active = !active;
+            LOGGER.info("Auto Safe Anchor {}", active ? "enabled" : "disabled");
             if (client.player != null) {
                 client.player.sendMessage(
                         Text.literal("§6[AutoSafeAnchor] §fMod is now " + (active ? "§aENABLED" : "§cDISABLED")),
@@ -241,10 +257,6 @@ public class ExampleMod implements ClientModInitializer {
                     reset(client);
                     return;
                 }
-
-                // Keep the totem in the main hand while triggering the charged anchor.
-                // The anchor explosion itself is caused by interacting with a charged
-                // respawn anchor outside the Nether; the held item does not determine it.
                 client.player.getInventory().selectedSlot = totemSlot;
                 interactExistingBlock(client, targetAnchorPos);
                 reset(client);
