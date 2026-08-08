@@ -708,4 +708,5 @@ public class ExampleMod implements ClientModInitializer {
                 resetState();
                 break;
         }
-    }
+    } 
+} //
