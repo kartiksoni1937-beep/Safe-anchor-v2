@@ -77,6 +77,7 @@ public class ExampleMod implements ClientModInitializer {
 
         ClientTickEvents.END_CLIENT_TICK.register(client -> {
             tick(client);
+            endTick(client);
         });
     }
 
