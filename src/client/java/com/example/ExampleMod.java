@@ -485,4 +485,227 @@ public class ExampleMod implements ClientModInitializer {
         double dx = focusX - eye.getX();
         double dy = focusY - eye.getY();
         double dz = focusZ - eye.getZ();
-        doub
+        double horizontal = Math.sqrt(dx * dx + dz * dz);
+
+        targetYaw_ = (float) (Math.atan2(dz, dx) * 180.0 / Math.PI - 90.0);
+        targetPitch_ = (float) (-Math.atan2(dy, horizontal) * 180.0 / Math.PI);
+
+        currentYaw_ = targetYaw_;
+        currentPitch_ = targetPitch_;
+        smoothInitialized_ = true;
+        smoothDone_ = true;
+        stageSilentRotation(player, targetYaw_, targetPitch_);
+        sendSyntheticLookPacket(client, player, targetYaw_, targetPitch_);
+        remoteRotationHoldTicks_ = Math.max(remoteRotationHoldTicks_, 2);
+    }
+
+    public void runPendingAction(MinecraftClient client) {
+        int action = pendingAction_;
+        pendingAction_ = 0;
+        pendingTicks_ = 0;
+        silentPovStaged_ = silentRotations_;
+        silentRotationPrimed_ = false;
+        lastActionSucceeded_ = false;
+
+        if (action == 0 || !havePositions_) return;
+        remoteRotationHoldTicks_ = 2;
+
+        if (action == 1 || action == 3) {
+            ClientWorld world = client.world;
+            if (world != null) {
+                int targetX = (action == 3) ? anchorX_ : protectX_;
+                int targetY = (action == 3) ? anchorY_ : protectY_;
+                int targetZ = (action == 3) ? anchorZ_ : protectZ_;
+                BlockHitResult hit = safeAnchorV3PlacementHit(world, targetX, targetY, targetZ, null);
+                if (hit != null) {
+                    lastActionSucceeded_ = useHit(client, hit);
+                }
+            }
+        } else if (action == 2 || action == 4) {
+            BlockPos anchorPos = safeAnchorV3Pos(anchorX_, anchorY_, anchorZ_);
+            BlockHitResult hit = anchorPos != null ? safeAnchorV3AnchorHit(anchorPos, anchorY_ + 0.5) : null;
+            if (hit != null) {
+                boolean safeToExplode = action != 2 || safeAnchorV3ProtectionReady(client, anchorX_, anchorY_, anchorZ_, protectX_, protectY_, protectZ_);
+                if (safeToExplode) {
+                    lastActionSucceeded_ = useHit(client, hit);
+                }
+                if (action == 4 && lastActionSucceeded_) {
+                    chargeAccepted_ = true;
+                }
+            }
+        }
+
+        if (lastActionSucceeded_) {
+            remoteFocus_ = (action == 1) ? 1 : 0;
+            holdAimOnAnchor(client);
+        }
+    }
+
+    public void tick(MinecraftClient client) {
+        if (client.player == null || client.world == null) {
+            if (active_) resetState();
+            return;
+        }
+
+        ClientPlayerEntity player = client.player;
+        ClientWorld world = client.world;
+
+        boolean zPressed = GLFW.glfwGetKey(client.getWindow().getHandle(), GLFW.GLFW_KEY_Z) == GLFW.GLFW_PRESS;
+        
+        if (!active_) {
+            if (!zPressed) {
+                smoothInitialized_ = false;
+                smoothDone_ = false;
+                return;
+            }
+            if (!smoothInitialized_) {
+                currentYaw_ = player.getYaw();
+                currentPitch_ = player.getPitch();
+            }
+            active_ = true;
+            safetySequenceActive_ = true;
+        }
+
+        if (!hasRequiredItems(player)) {
+            if (active_) resetState();
+            return;
+        }
+
+        if (clock_ < switchDelay_) {
+            clock_++;
+            return;
+        }
+        clock_ = 0;
+
+        switch (step_) {
+            case 0:
+                if (!acquirePositions(client, player, world)) {
+                    resetState();
+                } else {
+                    step_++;
+                }
+                break;
+            case 1:
+                if (!placeAt(client, player, world, true)) {
+                    resetState();
+                } else {
+                    step_++;
+                }
+                break;
+            case 2:
+                BlockPos anchor = safeAnchorV3Pos(anchorX_, anchorY_, anchorZ_);
+                boolean anchorVisible = anchor != null && world.getBlockState(anchor).isOf(Blocks.RESPAWN_ANCHOR);
+                int existingCharge = anchorVisible ? chargeAt(world, anchor) : -1;
+                boolean anchorSpaceOpen = anchor != null && safeAnchorV3Replaceable(world, anchor);
+
+                if (!anchorVisible) {
+                    if (!anchorSpaceOpen) {
+                        resetState();
+                        break;
+                    }
+                    if (++anchorWait_ > 4) {
+                        anchorWait_ = 0;
+                        step_ = 1;
+                    }
+                    break;
+                }
+                anchorWait_ = 0;
+                if (existingCharge > 0) {
+                    chargeAccepted_ = true;
+                    step_++;
+                    break;
+                }
+                if (pendingAction_ == 4 || chargeAccepted_) {
+                    step_++;
+                    break;
+                }
+                if (chargeAnchor(client)) {
+                    step_++;
+                }
+                break;
+            case 3:
+                BlockPos chargedAnchor = safeAnchorV3Pos(anchorX_, anchorY_, anchorZ_);
+                int charge = chargedAnchor != null ? chargeAt(world, chargedAnchor) : -1;
+                if (charge < 0) {
+                    resetState();
+                    break;
+                }
+                if (charge == 0) {
+                    if (pendingAction_ == 4) break;
+                    if (!chargeAccepted_) {
+                        step_ = 2;
+                        break;
+                    }
+                }
+                chargeWait_ = 0;
+                if (!protectionSent_ && !acquireProtectionPosition(client, player, world)) {
+                    protectionWait_ = 0;
+                    break;
+                }
+                BlockPos protection = safeAnchorV3Pos(protectX_, protectY_, protectZ_);
+                boolean replaceable = protection != null && safeAnchorV3Replaceable(world, protection);
+                boolean glowstonePlaced = protection != null && world.getBlockState(protection).isOf(Blocks.GLOWSTONE);
+
+                if (glowstonePlaced) {
+                    remoteFocus_ = 1;
+                    protectionSent_ = false;
+                    protectionWait_ = 0;
+                    protectionAttempts_ = 0;
+                    step_++;
+                } else if (!replaceable) {
+                    protectionSent_ = false;
+                    protectionWait_ = 0;
+                    protectionAttempts_ = 0;
+                    acquireProtectionPosition(client, player, world);
+                } else if (!protectionSent_) {
+                    protectionSent_ = placeAt(client, player, world, false);
+                    protectionWait_ = 0;
+                    protectionAttempts_++;
+                } else if (++protectionWait_ > Math.min(8, 2 + protectionAttempts_)) {
+                    protectionSent_ = false;
+                    protectionWait_ = 0;
+                }
+                break;
+            case 4:
+                player.getInventory().selectedSlot = Math.clamp(explosionSlot_, 1, 9) - 1;
+                step_++;
+                break;
+            case 5:
+                remoteFocus_ = 0;
+                if (!safeAnchorV3ProtectionReady(client, anchorX_, anchorY_, anchorZ_, protectX_, protectY_, protectZ_)) {
+                    BlockPos anchorBlock = safeAnchorV3Pos(anchorX_, anchorY_, anchorZ_);
+                    int currentCharge = anchorBlock != null ? chargeAt(world, anchorBlock) : -1;
+                    if (currentCharge <= 0) {
+                        if (++chargeWait_ > 12) resetState();
+                        break;
+                    }
+                    protectionSent_ = false;
+                    protectionWait_ = 0;
+                    acquireProtectionPosition(client, player, world);
+                    step_ = 3;
+                    break;
+                }
+                chargeWait_ = 0;
+                if (!interactAnchor(client)) {
+                    resetState();
+                    break;
+                }
+                step_++;
+                break;
+            case 6:
+                BlockPos finalAnchor = safeAnchorV3Pos(anchorX_, anchorY_, anchorZ_);
+                int finalCharge = finalAnchor != null ? chargeAt(world, finalAnchor) : -1;
+                if (finalCharge < 0) {
+                    resetState();
+                    break;
+                }
+                if (!lastActionSucceeded_ || ++explosionWait_ > 3) {
+                    explosionWait_ = 0;
+                    step_ = 4;
+                }
+                break;
+            default:
+                resetState();
+                break;
+        }
+    }
