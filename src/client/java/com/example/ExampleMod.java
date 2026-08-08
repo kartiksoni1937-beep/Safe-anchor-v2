@@ -9,7 +9,7 @@ import net.minecraft.client.network.ClientPlayNetworkHandler;
 import net.minecraft.client.network.ClientPlayerEntity;
 import net.minecraft.client.world.ClientWorld;
 import net.minecraft.entity.Entity;
-import net.minecraft.entity.ExperienceOrb;
+import net.minecraft.entity.ExperienceOrbEntity;
 import net.minecraft.entity.ItemEntity;
 import net.minecraft.entity.player.PlayerInventory;
 import net.minecraft.item.Items;
@@ -168,9 +168,10 @@ public class ExampleMod implements ClientModInitializer {
         List<Entity> entities = world.getEntitiesByClass(Entity.class, box, entity -> true);
         
         boolean blocked = false;
-        for (Entity entity : entities) {
+                for (Entity entity : entities) {
             if (entity == null) continue;
-            boolean nonBlockingDrop = (entity instanceof ItemEntity) || (entity instanceof ExperienceOrb);
+            boolean nonBlockingDrop = (entity instanceof ItemEntity) || (entity instanceof ExperienceOrbEntity);
+    
             blocked = !nonBlockingDrop;
             if (blocked) break;
         }
