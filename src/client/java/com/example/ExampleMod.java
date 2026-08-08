@@ -24,7 +24,6 @@ import org.slf4j.LoggerFactory;
 public class ExampleMod implements ClientModInitializer {
     public static final String MOD_ID = "examplemod";
     public static final Logger LOGGER = LoggerFactory.getLogger(MOD_ID);
-
     private static final double RANGE = 9.0D;
 
     private KeyBinding toggleKey;
@@ -51,13 +50,15 @@ public class ExampleMod implements ClientModInitializer {
 
             int x = 10;
             int y = 10;
-            String status = "§6[AutoSafeAnchor] §f" + (active ? "§aENABLED" : "§cDISABLED");
-            drawContext.drawText(client.textRenderer, Text.literal(status), x, y, 0xFFFFFFFF, true);
+            drawContext.drawText(client.textRenderer,
+                    Text.literal("§6[AutoSafeAnchor] §f" + (active ? "§aENABLED" : "§cDISABLED")),
+                    x, y, 0xFFFFFFFF, true);
             if (active) {
                 drawContext.drawText(client.textRenderer,
                         Text.literal("§6Target: §f" + targetName), x, y + 12, 0xFFFFFFFF, true);
                 drawContext.drawText(client.textRenderer,
-                        Text.literal("§6Step: §e" + (step < 0 ? "Idle" : step)), x, y + 24, 0xFFFFFFFF, true);
+                        Text.literal("§6Step: §e" + (step < 0 ? "Idle" : step)),
+                        x, y + 24, 0xFFFFFFFF, true);
             }
         });
 
@@ -122,28 +123,23 @@ public class ExampleMod implements ClientModInitializer {
 
         switch (step) {
             case 0 -> {
-                // Place the glowstone only in an open block above the player.
+                // Put the glowstone protection block in an open position above the player.
                 int slot = findHotbarItem(client, Items.GLOWSTONE);
-                if (slot < 0) {
-                    reset(client);
-                    return;
-                }
-
                 BlockPos protectionPos = client.player.getBlockPos().up(2);
-                if (!canPlaceAt(client, protectionPos)) {
+                if (slot < 0 || !canPlaceAt(client, protectionPos)) {
                     reset(client);
                     return;
                 }
 
                 client.player.getInventory().selectedSlot = slot;
-                if (placeOnTopOf(client, protectionPos.down())) {
+                if (interactBlock(client, protectionPos.down(), Direction.UP)) {
                     step = 1;
                 } else {
                     reset(client);
                 }
             }
             case 1 -> {
-                // Place the anchor at the enemy's feet by clicking the supporting block below it.
+                // Place the respawn anchor at the enemy's feet from the supporting block below.
                 int slot = findHotbarItem(client, Items.RESPAWN_ANCHOR);
                 if (slot < 0 || !canPlaceAt(client, targetAnchorPos)) {
                     reset(client);
@@ -151,14 +147,14 @@ public class ExampleMod implements ClientModInitializer {
                 }
 
                 client.player.getInventory().selectedSlot = slot;
-                if (placeOnTopOf(client, targetAnchorPos.down())) {
+                if (interactBlock(client, targetAnchorPos.down(), Direction.UP)) {
                     step = 2;
                 } else {
                     reset(client);
                 }
             }
             case 2 -> {
-                // Charge the anchor with glowstone.
+                // Charge the placed anchor with glowstone.
                 int slot = findHotbarItem(client, Items.GLOWSTONE);
                 if (slot < 0) {
                     reset(client);
@@ -173,18 +169,19 @@ public class ExampleMod implements ClientModInitializer {
                 }
             }
             case 3 -> {
-                // Use the currently selected hotbar item to interact with the charged anchor.
-                // Do not assume slot 7 contains a specific item.
-                client.player.getInventory().selectedSlot = originalSlot;
+                // Hold a totem while triggering the charged anchor, then restore the old slot.
+                int totemSlot = findHotbarItem(client, Items.TOTEM_OF_UNDYING);
+                if (totemSlot < 0) {
+                    reset(client);
+                    return;
+                }
+
+                client.player.getInventory().selectedSlot = totemSlot;
                 interactBlock(client, targetAnchorPos, Direction.UP);
                 reset(client);
             }
             default -> reset(client);
         }
-    }
-
-    private boolean placeOnTopOf(MinecraftClient client, BlockPos supportPos) {
-        return interactBlock(client, supportPos, Direction.UP);
     }
 
     private boolean interactBlock(MinecraftClient client, BlockPos blockPos, Direction side) {
@@ -205,9 +202,7 @@ public class ExampleMod implements ClientModInitializer {
 
     private int findHotbarItem(MinecraftClient client, Item item) {
         for (int i = 0; i < 9; i++) {
-            if (client.player.getInventory().getStack(i).isOf(item)) {
-                return i;
-            }
+            if (client.player.getInventory().getStack(i).isOf(item)) return i;
         }
         return -1;
     }
