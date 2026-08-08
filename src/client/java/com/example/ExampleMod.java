@@ -1,5 +1,7 @@
-package com.example.mod.modules;
+package com.example;
 
+import net.fabricmc.api.ClientModInitializer;
+import net.fabricmc.fabric.api.client.event.lifecycle.v1.ClientTickEvents;
 import net.minecraft.block.BlockState;
 import net.minecraft.block.Blocks;
 import net.minecraft.client.MinecraftClient;
@@ -21,15 +23,16 @@ import net.minecraft.util.math.Box;
 import net.minecraft.util.math.Direction;
 import net.minecraft.util.math.Vec3d;
 import org.lwjgl.glfw.GLFW;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.List;
 
-/**
- * SafeAnchorV3Module translated to Java with Z-key toggle support[span_1](start_span)[span_1](end_span).
- */
-public class SafeAnchorV3Module {
+public class ExampleMod implements ClientModInitializer {
+    public static final String MOD_ID = "example-mod";
+    public static final Logger LOGGER = LoggerFactory.getLogger(MOD_ID);
 
     private boolean active_ = false;
     private static boolean safetySequenceActive_ = false;
@@ -62,15 +65,20 @@ public class SafeAnchorV3Module {
     private int anchorX_, anchorY_, anchorZ_;
     private int protectX_, protectY_, protectZ_;
 
-    // Settings
     private int switchDelay_ = 0;
     private int explosionSlot_ = 1;
     private int range_ = 40; 
     private boolean silentRotations_ = true;
     private boolean smoothRotations_ = true;
-    private int rotationSpeed_ = 180;
-    private boolean useEasing_ = true;
-    private int easingStrength_ = 2;
+
+    @Override
+    public void onInitializeClient() {
+        LOGGER.info("Initializing Example Mod with SafeAnchor logic!");
+
+        ClientTickEvents.END_CLIENT_TICK.register(client -> {
+            tick(client);
+        });
+    }
 
     public void resetState() {
         active_ = false;
@@ -94,16 +102,6 @@ public class SafeAnchorV3Module {
             silentPovStaged_ = false;
         }
         silentRotationPrimed_ = false;
-    }
-
-    public void onDisable(MinecraftClient client) {
-        pendingAction_ = 0;
-        endTick(client);
-        resetState();
-        remoteRotationHoldTicks_ = 0;
-        silentPovStaged_ = false;
-        smoothInitialized_ = false;
-        smoothDone_ = false;
     }
 
     public void endTick(MinecraftClient client) {
@@ -487,4 +485,4 @@ public class SafeAnchorV3Module {
         double dx = focusX - eye.getX();
         double dy = focusY - eye.getY();
         double dz = focusZ - eye.getZ();
-        double horizontal = Math.sqrt(dx * dx + 
+        doub
