@@ -1,132 +1,493 @@
-package com.example.addon.modules;
+package com.example.mod.modules;
 
+import net.minecraft.block.BlockState;
 import net.minecraft.block.Blocks;
-import net.minecraft.block.RespawnAnchorBlock;
 import net.minecraft.client.MinecraftClient;
-import net.minecraft.entity.player.PlayerEntity;
+import net.minecraft.client.network.ClientPlayNetworkHandler;
+import net.minecraft.client.network.ClientPlayerEntity;
+import net.minecraft.client.world.ClientWorld;
+import net.minecraft.entity.Entity;
+import net.minecraft.entity.ExperienceOrb;
+import net.minecraft.entity.ItemEntity;
+import net.minecraft.entity.player.PlayerInventory;
 import net.minecraft.item.Items;
-import net.minecraft.network.packet.c2s.play.PlayerInteractBlockC2SPacket;
-import net.minecraft.network.packet.c2s.play.UpdateSelectedSlotC2SPacket;
+import net.minecraft.network.packet.c2s.play.PlayerMoveC2SPacket;
 import net.minecraft.util.Hand;
 import net.minecraft.util.hit.BlockHitResult;
+import net.minecraft.util.hit.HitResult;
 import net.minecraft.util.math.BlockPos;
+import net.minecraft.util.math.Box;
 import net.minecraft.util.math.Direction;
 import net.minecraft.util.math.Vec3d;
 
-public class ConsistentSafeAnchorModule {
+import java.util.ArrayList;
+import java.util.Comparator;
+import java.util.List;
 
-private final MinecraftClient mc = MinecraftClient.getInstance();  
+/**
+ * Converted from the C++ JNI SafeAnchorV3Module implementation[span_1](start_span)[span_1](end_span).
+ */
+public class SafeAnchorV3Module {
 
-// Configuration  
-private final double maxRange = 5.0;  
-private final double minSafetyDistance = 4.0; // Prevents self-damage  
-private final float minHealth = 10.0f;  
-private final int timeoutTicks = 6;           // Watchdog timer to prevent getting stuck  
+    private boolean active_ = false;
+    private static boolean safetySequenceActive_ = false;
+    private boolean havePositions_ = false;
+    private int clock_ = 0;
+    private int step_ = 0;
+    private int pendingAction_ = 0;
+    private int pendingTicks_ = 0;
+    private int anchorWait_ = 0;
+    private int chargeWait_ = 0;
+    private int explosionWait_ = 0;
+    private int protectionWait_ = 0;
+    private int protectionAttempts_ = 0;
+    private boolean protectionSent_ = false;
+    private boolean chargeAccepted_ = false;
+    private boolean lastActionSucceeded_ = false;
+    private int remoteFocus_ = 0;
+    private int remoteBobTick_ = 0;
+    private int remoteRotationHoldTicks_ = 0;
+    private boolean silentPovStaged_ = false;
+    private boolean silentRotationPrimed_ = false;
+    private boolean smoothInitialized_ = false;
+    private boolean smoothDone_ = false;
 
-private enum State { IDLE, PLACING, CHARGING, DETONATING }  
-private State currentState = State.IDLE;  
-private int stageTimer = 0;  
-private BlockPos currentAnchorPos = null;  
+    private float targetYaw_ = 0.0f;
+    private float targetPitch_ = 0.0f;
+    private float currentYaw_ = 0.0f;
+    private float currentPitch_ = 0.0f;
 
-public void onTick() {  
-    if (mc.player == null || mc.world == null) return;  
+    private int anchorX_, anchorY_, anchorZ_;
+    private int protectX_, protectY_, protectZ_;
 
-    // 1. Global Safety & Environment Checks  
-    if (mc.world.getDimension().respawnAnchorWorks() ||   
-        (mc.player.getHealth() + mc.player.getAbsorptionAmount() < minHealth)) {  
-        resetState();  
-        return;  
-    }  
+    // Module Settings placeholders
+    private int switchDelay_ = 0;
+    private int explosionSlot_ = 1;
+    private int range_ = 40; // 4.0 blocks scaled
+    private boolean silentRotations_ = true;
+    private boolean smoothRotations_ = true;
+    private int rotationSpeed_ = 180;
+    private boolean useEasing_ = true;
+    private int easingStrength_ = 2;
 
-    // 2. Target Acquisition  
-    PlayerEntity target = getBestTarget();  
-    if (target == null) {  
-        resetState();  
-        return;  
-    }  
+    public SafeAnchorV3Module() {
+        // Module("SafeAnchorV3", "Combat", 'V')
+    }
 
-    BlockPos targetPos = target.getBlockPos().add(0, 2, 0);  
+    public void resetState() {
+        active_ = false;
+        safetySequenceActive_ = false;
+        havePositions_ = false;
+        clock_ = 0;
+        step_ = 0;
+        pendingAction_ = 0;
+        pendingTicks_ = 0;
+        anchorWait_ = 0;
+        chargeWait_ = 0;
+        explosionWait_ = 0;
+        protectionWait_ = 0;
+        protectionAttempts_ = 0;
+        protectionSent_ = false;
+        chargeAccepted_ = false;
+        lastActionSucceeded_ = false;
+        remoteFocus_ = 0;
+        remoteBobTick_ = 0;
+        if (remoteRotationHoldTicks_ <= 0) {
+            silentPovStaged_ = false;
+        }
+        silentRotationPrimed_ = false;
+    }
 
-    // 3. Self-Harm Safety Distance Check  
-    if (mc.player.getPos().distanceTo(Vec3d.ofCenter(targetPos)) < minSafetyDistance) {  
-        return;   
-    }  
+    public void onDisable(MinecraftClient client) {
+        pendingAction_ = 0;
+        endTick(client);
+        resetState();
+        remoteRotationHoldTicks_ = 0;
+        silentPovStaged_ = false;
+        smoothInitialized_ = false;
+        smoothDone_ = false;
+    }
 
-    currentAnchorPos = targetPos;  
+    public void endTick(MinecraftClient client) {
+        if (!silentRotations_ || client == null || client.player == null) {
+            return;
+        }
+        ClientPlayerEntity player = client.player;
+        if (pendingAction_ != 0) {
+            stageSilentRotation(player, targetYaw_, targetPitch_);
+            if (sendSyntheticLookPacket(client, player, targetYaw_, targetPitch_)) {
+                silentRotationPrimed_ = false;
+                runPendingAction(client);
+            }
+        } else if (active_ && havePositions_ && step_ >= 2) {
+            holdAimOnAnchor(client);
+        } else if (remoteRotationHoldTicks_ > 0) {
+            stageSilentRotation(player, currentYaw_, currentPitch_);
+            sendSyntheticLookPacket(client, player, currentYaw_, currentPitch_);
+        }
+    }
 
-    // 4. Watchdog Timer (Consistency Protector)  
-    if (currentState != State.IDLE) {  
-        stageTimer++;  
-        if (stageTimer > timeoutTicks) {  
-            // If server takes too long to respond, reset state to bypass desync/rubberbanding  
-            resetState();  
-            return;  
-        }  
-    }  
+    public boolean hasRequiredItems(ClientPlayerEntity player) {
+        return findHot(player, "respawn_anchor") >= 0 && findHot(player, "glowstone") >= 0;
+    }
 
-    // 5. Execute Sequence with Verification  
-    executeConsistentSequence(currentAnchorPos);  
-}  
+    private int findHot(ClientPlayerEntity player, String itemType) {
+        PlayerInventory inv = player.getInventory();
+        for (int i = 0; i < 9; i++) {
+            var stack = inv.getStack(i);
+            if (itemType.equals("respawn_anchor") && stack.isOf(Blocks.RESPAWN_ANCHOR.asItem())) return i;
+            if (itemType.equals("glowstone") && stack.isOf(Items.GLOWSTONE)) return i;
+        }
+        return -1;
+    }
 
-private void executeConsistentSequence(BlockPos pos) {  
-    var blockState = mc.world.getBlockState(pos);  
+    private BlockPos safeAnchorV3Pos(int x, int y, int z) {
+        return new BlockPos(x, y, z);
+    }
 
-    if (blockState.isAir()) {  
-        currentState = State.PLACING;  
-        if (switchToItem(Items.RESPAWN_ANCHOR)) {  
-            sendInteractPacket(pos);  
-        }  
-    }   
-    else if (blockState.isOf(Blocks.RESPAWN_ANCHOR)) {  
-        int charges = blockState.get(RespawnAnchorBlock.CHARGES);  
+    private boolean safeAnchorV3Replaceable(ClientWorld world, BlockPos pos) {
+        if (world == null || pos == null) return false;
+        BlockState state = world.getBlockState(pos);
+        boolean replaceable = state.isAir() || state.isReplaceable();
+        if (!replaceable) {
+            String name = state.getBlock().getTranslationKey();
+            String[] extraReplaceable = {
+                "short_grass", "tall_grass", "fern", "large_fern", "dead_bush",
+                "vine", "fire", "soul_fire", "water", "lava", "snow",
+                "seagrass", "tall_seagrass", "kelp", "kelp_plant"
+            };
+            for (String id : extraReplaceable) {
+                if (name.contains(id)) {
+                    replaceable = true;
+                    break;
+                }
+            }
+        }
+        return replaceable;
+    }
 
-        if (charges == 0) {  
-            currentState = State.CHARGING;  
-            if (switchToItem(Items.GLOWSTONE)) {  
-                sendInteractPacket(pos);  
-            }  
-        } else {  
-            currentState = State.DETONATING;  
-            sendInteractPacket(pos);  
-            resetState(); // Reset immediately after detonation trigger for continuous loops  
-        }  
-    }   
-    else {  
-        // Block is occupied by something else; reset to avoid breaking loops  
-        resetState();  
-    }  
-}  
+    private boolean safeAnchorV3SamePos(BlockPos pos, int x, int y, int z) {
+        if (pos == null) return false;
+        return pos.getX() == x && pos.getY() == y && pos.getZ() == z;
+    }
 
-private void sendInteractPacket(BlockPos pos) {  
-    BlockHitResult hitResult = new BlockHitResult(Vec3d.ofCenter(pos), Direction.UP, pos, false);  
-    mc.getNetworkHandler().sendPacket(new PlayerInteractBlockC2SPacket(Hand.MAIN_HAND, hitResult, 0));  
-}  
+    private boolean safeAnchorV3EntityBlocked(MinecraftClient client, ClientWorld world, int x, int y, int z) {
+        if (client == null || world == null) return false;
+        Box box = new Box(x + 0.01, y + 0.01, z + 0.01, x + 0.99, y + 0.99, z + 0.99);
+        List<Entity> entities = world.getEntitiesByClass(Entity.class, box, entity -> true);
+        
+        boolean blocked = false;
+        for (Entity entity : entities) {
+            if (entity == null) continue;
+            boolean nonBlockingDrop = (entity instanceof ItemEntity) || (entity instanceof ExperienceOrb);
+            blocked = !nonBlockingDrop;
+            if (blocked) break;
+        }
+        return blocked;
+    }
 
-private boolean switchToItem(net.minecraft.item.Item item) {  
-    for (int i = 0; i < 9; i++) {  
-        if (mc.player.getInventory().getStack(i).getItem() == item) {  
-            if (mc.player.getInventory().selectedSlot != i) {  
-                mc.player.getInventory().selectedSlot = i;  
-                mc.getNetworkHandler().sendPacket(new UpdateSelectedSlotC2SPacket(i));  
-            }  
-            return true;  
-        }  
-    }  
-    return false;  
-}  
+    public boolean safeAnchorV3ProtectionReady(MinecraftClient client, int anchorX, int anchorY, int anchorZ, int protectX, int protectY, int protectZ) {
+        if (client == null || client.world == null || client.player == null) return false;
+        ClientWorld world = client.world;
+        ClientPlayerEntity player = client.player;
 
-private PlayerEntity getBestTarget() {  
-    return mc.world.getPlayers().stream()  
-            .filter(p -> p != mc.player && !p.isDead() && !p.isSpectator())  
-            .filter(p -> mc.player.distanceTo(p) <= maxRange)  
-            .min((p1, p2) -> Double.compare(mc.player.distanceTo(p1), mc.player.distanceTo(p2)))  
-            .orElse(null);  
-}  
+        BlockPos anchorPos = safeAnchorV3Pos(anchorX, anchorY, anchorZ);
+        BlockPos protectPos = safeAnchorV3Pos(protectX, protectY, protectZ);
 
-private void resetState() {  
-    currentState = State.IDLE;  
-    stageTimer = 0;  
-    currentAnchorPos = null;  
-}
+        boolean ready = anchorPos != null && protectPos != null &&
+                chargeAt(world, anchorPos) > 0 &&
+                world.getBlockState(protectPos).getBlock().getTranslationKey().contains("glowstone");
 
-}
+        if (ready) {
+            double playerX = player.getX();
+            double playerY = player.getY();
+            double playerZ = player.getZ();
+
+            double anchorDx = anchorX + 0.5 - playerX;
+            double anchorDz = anchorZ + 0.5 - playerZ;
+            double shieldDx = protectX + 0.5 - playerX;
+            double shieldDz = protectZ + 0.5 - playerZ;
+
+            double anchorDistanceSq = anchorDx * anchorDx + anchorDz * anchorDz;
+            double along = shieldDx * anchorDx + shieldDz * anchorDz;
+            double perpendicularSq = shieldDx * shieldDx + shieldDz * shieldDz -
+                    (along * along / Math.max(anchorDistanceSq, 0.001));
+
+            int neighborX = Math.abs(protectX - anchorX);
+            int neighborZ = Math.abs(protectZ - anchorZ);
+
+            ready = anchorDistanceSq > 0.25 && along > 0.05 &&
+                    along < anchorDistanceSq && perpendicularSq <= 0.80 &&
+                    protectY == anchorY && neighborX <= 1 && neighborZ <= 1 &&
+                    (neighborX != 0 || neighborZ != 0) &&
+                    Math.abs(playerY - protectY) <= 1.5;
+        }
+        return ready;
+    }
+
+    private int chargeAt(ClientWorld world, BlockPos pos) {
+        BlockState state = world.getBlockState(pos);
+        if (state.isOf(Blocks.RESPAWN_ANCHOR)) {
+            // Retrieve charges property value safely depending on mapping
+            return state.get(net.minecraft.block.RespawnAnchorBlock.CHARGES);
+        }
+        return -1;
+    }
+
+    public BlockHitResult safeAnchorV3PlacementHit(ClientWorld world, int x, int y, int z, double[] aimOut) {
+        int[][] offsets = {
+            {0, -1, 0}, {0, 1, 0}, {0, 0, -1},
+            {0, 0, 1}, {-1, 0, 0}, {1, 0, 0}
+        };
+        Direction[] faces = {
+            Direction.UP, Direction.DOWN, Direction.SOUTH,
+            Direction.NORTH, Direction.EAST, Direction.WEST
+        };
+
+        for (int i = 0; i < offsets.length; i++) {
+            int[] offset = offsets[i];
+            BlockPos support = new BlockPos(x + offset[0], y + offset[1], z + offset[2]);
+            if (safeAnchorV3Replaceable(world, support)) {
+                continue;
+            }
+            double px = x + 0.5 + offset[0] * 0.5;
+            double py = y + 0.5 + offset[1] * 0.5;
+            double pz = z + 0.5 + offset[2] * 0.5;
+
+            Vec3d point = new Vec3d(px, py, pz);
+            if (aimOut != null && aimOut.length >= 3) {
+                aimOut[0] = px;
+                aimOut[1] = py;
+                aimOut[2] = pz;
+            }
+            return new BlockHitResult(point, faces[i], support, false);
+        }
+        return null;
+    }
+
+    public BlockHitResult safeAnchorV3AnchorHit(BlockPos pos, double pointY) {
+        if (pos == null) return null;
+        Vec3d point = new Vec3d(pos.getX() + 0.5, pointY, pos.getZ() + 0.5);
+        return new BlockHitResult(point, Direction.UP, pos, false);
+    }
+
+    private boolean sendSyntheticLookPacket(MinecraftClient client, ClientPlayerEntity player, float yaw, float pitch) {
+        if (client == null || player == null || !Float.isFinite(yaw) || !Float.isFinite(pitch)) {
+            return false;
+        }
+        boolean onGround = player.isOnGround();
+        PlayerMoveC2SPacket packet = new PlayerMoveC2SPacket.LookAndOnGround(yaw, pitch, onGround);
+        ClientPlayNetworkHandler network = client.getNetworkHandler();
+        if (network != null) {
+            network.sendPacket(packet);
+            return true;
+        }
+        return false;
+    }
+
+    public boolean acquireProtectionPosition(MinecraftClient client, ClientPlayerEntity player, ClientWorld world) {
+        if (client == null || player == null || world == null) return false;
+        double px = player.getX();
+        double pz = player.getZ();
+        int playerX = (int) Math.floor(px);
+        int playerY = player.getBlockY();
+        int playerZ = (int) Math.floor(pz);
+
+        class Candidate {
+            int x, z;
+            double playerDistanceSq;
+            Candidate(int x, int z) { this.x = x; this.z = z; }
+        }
+
+        List<Candidate> candidates = new ArrayList<>();
+        candidates.add(new Candidate(anchorX_ + 1, anchorZ_));
+        candidates.add(new Candidate(anchorX_ - 1, anchorZ_));
+        candidates.add(new Candidate(anchorX_, anchorZ_ + 1));
+        candidates.add(new Candidate(anchorX_, anchorZ_ - 1));
+        candidates.add(new Candidate(anchorX_ + 1, anchorZ_ + 1));
+        candidates.add(new Candidate(anchorX_ + 1, anchorZ_ - 1));
+        candidates.add(new Candidate(anchorX_ - 1, anchorZ_ + 1));
+        candidates.add(new Candidate(anchorX_ - 1, anchorZ_ - 1));
+
+        for (Candidate c : candidates) {
+            double dx = c.x + 0.5 - px;
+            double dz = c.z + 0.5 - pz;
+            c.playerDistanceSq = dx * dx + dz * dz;
+        }
+        candidates.sort(Comparator.comparingDouble(c -> c.playerDistanceSq));
+
+        double anchorDx = anchorX_ + 0.5 - px;
+        double anchorDz = anchorZ_ + 0.5 - pz;
+        double anchorDistanceSq = anchorDx * anchorDx + anchorDz * anchorDz;
+        BlockPos anchorPos = safeAnchorV3Pos(anchorX_, anchorY_, anchorZ_);
+        boolean anchorReady = anchorPos != null && world.getBlockState(anchorPos).isOf(Blocks.RESPAWN_ANCHOR);
+
+        for (Candidate candidate : candidates) {
+            if (candidate.x == playerX && candidate.z == playerZ && (anchorY_ == playerY || anchorY_ == playerY + 1)) {
+                continue;
+            }
+            double candidateDx = candidate.x + 0.5 - px;
+            double candidateDz = candidate.z + 0.5 - pz;
+            double along = candidateDx * anchorDx + candidateDz * anchorDz;
+            double perpendicularSq = candidateDx * candidateDx + candidateDz * candidateDz -
+                    (along * along / Math.max(anchorDistanceSq, 0.001));
+
+            if (along <= 0.0 || along >= anchorDistanceSq || perpendicularSq > 0.80) {
+                continue;
+            }
+
+            BlockPos targetPos = safeAnchorV3Pos(candidate.x, anchorY_, candidate.z);
+            boolean alreadyGlowstone = targetPos != null && world.getBlockState(targetPos).isOf(Blocks.GLOWSTONE);
+            boolean replaceable = targetPos != null && safeAnchorV3Replaceable(world, targetPos);
+
+            if (!replaceable && !alreadyGlowstone) continue;
+            if (replaceable && safeAnchorV3EntityBlocked(client, world, candidate.x, anchorY_, candidate.z)) continue;
+
+            if (replaceable && anchorReady) {
+                BlockHitResult placement = safeAnchorV3PlacementHit(world, candidate.x, anchorY_, candidate.z, null);
+                if (placement == null) continue;
+            }
+            protectX_ = candidate.x;
+            protectY_ = anchorY_;
+            protectZ_ = candidate.z;
+            return true;
+        }
+        return false;
+    }
+
+    public boolean acquirePositions(MinecraftClient client, ClientPlayerEntity player, ClientWorld world) {
+        HitResult hit = client.crosshairTarget;
+        if (!(hit instanceof BlockHitResult blockHit)) return false;
+
+        BlockPos hitPos = blockHit.getBlockPos();
+        Direction side = blockHit.getSide();
+        if (hitPos == null || side == null) return false;
+
+        anchorX_ = hitPos.getX();
+        anchorY_ = hitPos.getY();
+        anchorZ_ = hitPos.getZ();
+
+        if (!safeAnchorV3Replaceable(world, hitPos)) {
+            anchorX_ += side.getOffsetX();
+            anchorY_ += side.getOffsetY();
+            anchorZ_ += side.getOffsetZ();
+        }
+
+        double px = player.getX();
+        double py = player.getY();
+        double pz = player.getZ();
+
+        double cx = anchorX_ + 0.5;
+        double cy = anchorY_ + 0.5;
+        double cz = anchorZ_ + 0.5;
+        double distance = Math.sqrt((px - cx) * (px - cx) + (py - cy) * (py - cy) + (pz - cz) * (pz - cz));
+
+        if (distance > range_.load() / 10.0) {
+            return false;
+        }
+
+        boolean foundProtection = acquireProtectionPosition(client, player, world);
+        havePositions_ = foundProtection;
+        return foundProtection;
+    }
+
+    public boolean placeAt(MinecraftClient client, ClientPlayerEntity player, ClientWorld world, boolean anchorItem) {
+        int x = anchorItem ? anchorX_ : protectX_;
+        int y = anchorItem ? anchorY_ : protectY_;
+        int z = anchorItem ? anchorZ_ : protectZ_;
+        BlockPos targetPos = safeAnchorV3Pos(x, y, z);
+        if (targetPos == null || !safeAnchorV3Replaceable(world, targetPos)) {
+            return false;
+        }
+        int slot = findHot(player, anchorItem ? "respawn_anchor" : "glowstone");
+        if (slot < 0) return false;
+
+        player.getInventory().selectedSlot = slot;
+
+        double[] aim = new double[3];
+        BlockHitResult placement = safeAnchorV3PlacementHit(world, x, y, z, aim);
+        boolean accepted = false;
+        if (placement != null) {
+            int action = anchorItem ? 3 : 1;
+            lastActionSucceeded_ = false;
+            rotateTo(client, player, aim[0], aim[1], aim[2], action);
+            accepted = lastActionSucceeded_ || pendingAction_ == action;
+        }
+        return accepted;
+    }
+
+    public boolean chargeAnchor(MinecraftClient client) {
+        if (client.world == null || client.player == null) return false;
+        ClientWorld world = client.world;
+        ClientPlayerEntity player = client.player;
+
+        BlockPos anchorPos = safeAnchorV3Pos(anchorX_, anchorY_, anchorZ_);
+        if (anchorPos == null || safeAnchorV3Replaceable(world, anchorPos)) return false;
+
+        int glowstone = findHot(player, "glowstone");
+        if (glowstone < 0) return false;
+
+        player.getInventory().selectedSlot = glowstone;
+        lastActionSucceeded_ = false;
+        rotateTo(client, player, anchorX_ + 0.5, anchorY_ + 0.5, anchorZ_ + 0.5, 4);
+        return lastActionSucceeded_ || pendingAction_ == 4;
+    }
+
+    public boolean interactAnchor(MinecraftClient client) {
+        if (client.player == null) return false;
+        ClientPlayerEntity player = client.player;
+        Vec3d eye = player.getEyePos();
+        double aimY = anchorY_ + 1.0 > eye.getY() ? anchorY_ + 0.5 : anchorY_ + 1.0;
+
+        lastActionSucceeded_ = false;
+        rotateTo(client, player, anchorX_ + 0.5, aimY, anchorZ_ + 0.5, 2);
+        return lastActionSucceeded_ || pendingAction_ == 2;
+    }
+
+    public void rotateTo(MinecraftClient client, ClientPlayerEntity player, double x, double y, double z, int action) {
+        silentRotations_ = true;
+        Vec3d eye = player.getEyePos();
+        double dx = x - eye.getX();
+        double dy = y - eye.getY();
+        double dz = z - eye.getZ();
+
+        targetYaw_ = (float) (Math.atan2(dz, dx) * 180.0 / Math.PI - 90.0);
+        targetPitch_ = (float) (-Math.atan2(dy, Math.sqrt(dx * dx + dz * dz)) * 180.0 / Math.PI);
+
+        currentYaw_ = targetYaw_;
+        currentPitch_ = targetPitch_;
+        pendingTicks_ = 0;
+        smoothInitialized_ = true;
+        smoothDone_ = true;
+        stageSilentRotation(player, targetYaw_, targetPitch_);
+        pendingAction_ = action;
+        silentRotationPrimed_ = sendSyntheticLookPacket(client, player, targetYaw_, targetPitch_);
+    }
+
+    public void stageSilentRotation(ClientPlayerEntity player, float yaw, float pitch) {
+        if (player == null) return;
+        currentYaw_ = yaw;
+        currentPitch_ = pitch;
+        silentPovStaged_ = Float.isFinite(yaw) && Float.isFinite(pitch);
+    }
+
+    public void holdAimOnAnchor(MinecraftClient client) {
+        if (client.player == null || !havePositions_) return;
+        ClientPlayerEntity player = client.player;
+        Vec3d eye = player.getEyePos();
+
+        boolean focusProtection = remoteFocus_ == 1 && step_ >= 4;
+        double focusX = (focusProtection ? protectX_ : anchorX_) + 0.5;
+        double focusY = (focusProtection ? protectY_ : anchorY_) + 0.5 +
+                Math.sin((double) (++remoteBobTick_) * 0.65) * 0.035;
+        double focusZ = (focusProtection ? protectZ_ : anchorZ_) + 0.5;
+
+        double dx = focusX - eye.getX();
+        double dy = focusY - eye.getY();
+        double dz = focusZ - eye.getZ();
+        double horizontal = Math.sqrt(dx * dx + dz * dz);
+
+        targetYaw_ = (float) (Math.atan2(dz, dx) * 180.0 / Math.PI - 90.0);
+        targetPitch_ = (float) (-Math.atan2(dy, horizontal) * 180.0 / Math.PI);
+
+        
