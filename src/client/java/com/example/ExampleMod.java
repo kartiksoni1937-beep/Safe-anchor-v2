@@ -183,9 +183,6 @@ public class ExampleMod implements ClientModInitializer {
             reset(client);
             return;
         }
-
-        // Positions are immutable for the whole sequence. Player rotation or movement
-        // must never cause the module to pick another protection position mid-sequence.
         if (!isWithinReach(client, targetAnchorPos) || !isWithinReach(client, protectionPos)) {
             reset(client);
             return;
@@ -201,6 +198,9 @@ public class ExampleMod implements ClientModInitializer {
             case 1 -> handleAnchor(client);
             case 2 -> handleCharge(client);
             case 3 -> handleTrigger(client);
+            case 10 -> processPending(client, 10, 1);
+            case 11 -> processPending(client, 11, 2);
+            case 12 -> processPending(client, 12, 3);
             default -> reset(client);
         }
     }
@@ -221,14 +221,12 @@ public class ExampleMod implements ClientModInitializer {
             reset(client);
             return;
         }
-
         client.player.getInventory().selectedSlot = slot;
         if (!tryPlace(client, protectionPos)) {
             reset(client);
             return;
         }
 
-        // Do not issue another placement packet. Wait briefly for the server/world update.
         waitTicks = RETRY_TICKS;
         retries = 0;
         step = 10;
@@ -250,7 +248,6 @@ public class ExampleMod implements ClientModInitializer {
             reset(client);
             return;
         }
-
         client.player.getInventory().selectedSlot = slot;
         if (!tryPlace(client, targetAnchorPos)) {
             reset(client);
@@ -268,7 +265,6 @@ public class ExampleMod implements ClientModInitializer {
             reset(client);
             return;
         }
-
         int charges = state.get(RespawnAnchorBlock.CHARGES);
         if (charges > 0) {
             advance(3);
@@ -280,7 +276,6 @@ public class ExampleMod implements ClientModInitializer {
             reset(client);
             return;
         }
-
         client.player.getInventory().selectedSlot = slot;
         pendingCharge = charges;
         if (!interactExistingBlock(client, targetAnchorPos)) {
@@ -305,7 +300,6 @@ public class ExampleMod implements ClientModInitializer {
             reset(client);
             return;
         }
-
         client.player.getInventory().selectedSlot = totemSlot;
         interactExistingBlock(client, targetAnchorPos);
         reset(client);
@@ -328,18 +322,11 @@ public class ExampleMod implements ClientModInitializer {
             }
         }
 
-        if (waitTicks > 0) {
-            waitTicks--;
-            return;
-        }
-
         if (++retries > 2) {
             reset(client);
             return;
         }
 
-        // Re-enter only after the confirmation window expired; this prevents duplicate
-        // packets on consecutive ticks while still recovering quickly from latency.
         step = pendingStep - 10;
         waitTicks = RETRY_TICKS;
     }
