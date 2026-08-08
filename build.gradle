@@ -6,14 +6,19 @@ plugins {
 version = project.mod_version
 group = project.maven_group
 
+loom {
+	splitEnvironmentSourceSets()
+}
+
 repositories {
-	// Loom supplies the standard Fabric, Minecraft, and Maven Central repositories.
 }
 
 dependencies {
 	minecraft "com.mojang:minecraft:${project.minecraft_version}"
-	implementation "net.fabricmc:fabric-loader:${project.loader_version}"
-	implementation "net.fabricmc.fabric-api:fabric-api:${project.fabric_api_version}"
+	mappings loom.officialMojangMappings()
+
+	modImplementation "net.fabricmc:fabric-loader:${project.loader_version}"
+	modImplementation "net.fabricmc.fabric-api:fabric-api:${project.fabric_api_version}"
 }
 
 processResources {
@@ -52,6 +57,5 @@ publishing {
 	}
 
 	repositories {
-		// Add repositories here if you later want to publish the artifact.
 	}
 }
