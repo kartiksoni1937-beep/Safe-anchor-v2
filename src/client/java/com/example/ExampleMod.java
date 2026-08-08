@@ -4,9 +4,12 @@ import net.fabricmc.api.ClientModInitializer;
 import net.fabricmc.fabric.api.client.event.lifecycle.v1.ClientTickEvents;
 import net.fabricmc.fabric.api.client.keybinding.v1.KeyBindingHelper;
 import net.fabricmc.fabric.api.client.rendering.v1.HudRenderCallback;
+import net.minecraft.block.BlockState;
+import net.minecraft.client.MinecraftClient;
 import net.minecraft.client.option.KeyBinding;
 import net.minecraft.client.util.InputUtil;
 import net.minecraft.entity.player.PlayerEntity;
+import net.minecraft.item.Item;
 import net.minecraft.item.Items;
 import net.minecraft.text.Text;
 import net.minecraft.util.Hand;
@@ -22,172 +25,185 @@ public class ExampleMod implements ClientModInitializer {
     public static final String MOD_ID = "examplemod";
     public static final Logger LOGGER = LoggerFactory.getLogger(MOD_ID);
 
-    private static KeyBinding toggleKey;
-    private static boolean isActive = false;
-    private static int executionStep = -1;
-    private static int tickCounter = 0;
-    private static int originalSlot = 0;
-    private static BlockPos targetAnchorPos = null;
-    private static String currentEnemyName = "None";
+    private static final double RANGE = 9.0D;
+
+    private KeyBinding toggleKey;
+    private boolean active;
+    private int step = -1;
+    private int originalSlot;
+    private BlockPos targetAnchorPos;
+    private String targetName = "None";
 
     @Override
     public void onInitializeClient() {
-        LOGGER.info("Insane Auto Safe Anchor Initialized!");
+        LOGGER.info("Auto Safe Anchor initialized");
 
         toggleKey = KeyBindingHelper.registerKeyBinding(new KeyBinding(
-            "key.examplemod.toggle_anchor",
-            InputUtil.Type.KEYSYM,
-            GLFW.GLFW_KEY_Z,
-            "category.examplemod.general"
+                "key.examplemod.toggle_anchor",
+                InputUtil.Type.KEYSYM,
+                GLFW.GLFW_KEY_Z,
+                "category.examplemod.general"
         ));
 
-        // On-screen HUD Overlay matching utility hack clients
         HudRenderCallback.EVENT.register((drawContext, tickDelta) -> {
-            net.minecraft.client.MinecraftClient client = net.minecraft.client.MinecraftClient.getInstance();
+            MinecraftClient client = MinecraftClient.getInstance();
             if (client.player == null) return;
 
             int x = 10;
             int y = 10;
-            String statusText = "§6[AutoSafeAnchor] §fStatus: " + (isActive ? "§aENABLED" : "§cDISABLED");
-            drawContext.drawText(client.textRenderer, Text.literal(statusText), x, y, 0xFFFFFFFF, true);
-
-            if (isActive) {
-                String targetText = "§6Target: §f" + currentEnemyName;
-                drawContext.drawText(client.textRenderer, Text.literal(targetText), x, y + 12, 0xFFFFFFFF, true);
-                
-                String stepText = "§6Step: §e" + (executionStep == -1 ? "Idle" : "Executing (" + executionStep + ")");
-                drawContext.drawText(client.textRenderer, Text.literal(stepText), x, y + 24, 0xFFFFFFFF, true);
+            String status = "§6[AutoSafeAnchor] §f" + (active ? "§aENABLED" : "§cDISABLED");
+            drawContext.drawText(client.textRenderer, Text.literal(status), x, y, 0xFFFFFFFF, true);
+            if (active) {
+                drawContext.drawText(client.textRenderer,
+                        Text.literal("§6Target: §f" + targetName), x, y + 12, 0xFFFFFFFF, true);
+                drawContext.drawText(client.textRenderer,
+                        Text.literal("§6Step: §e" + (step < 0 ? "Idle" : step)), x, y + 24, 0xFFFFFFFF, true);
             }
         });
 
-        ClientTickEvents.END_CLIENT_TICK.register(client -> {
-            while (toggleKey.wasPressed()) {
-                isActive = !isActive;
-                if (client.player != null) {
-                    String status = isActive ? "§aENABLED" : "§cDISABLED";
-                    client.player.sendMessage(Text.literal("§6[AutoSafeAnchor] §fMod is now " + status), true);
-                }
-            }
-
-            if (!isActive || client.player == null || client.world == null || client.interactionManager == null) {
-                currentEnemyName = "None";
-                return;
-            }
-
-            if (executionStep >= 0) {
-                tickCounter++;
-                // Smooth 2-tick delay to prevent server desync/glitching
-                if (tickCounter >= 2) {
-                    tickCounter = 0;
-                    processAnchorSequence(client);
-                }
-                return;
-            }
-
-            PlayerEntity enemy = getNearestEnemy(client);
-            if (enemy != null) {
-                originalSlot = client.player.getInventory().selectedSlot;
-                targetAnchorPos = enemy.getBlockPos();
-                currentEnemyName = enemy.getName().getString();
-                executionStep = 0;
-                tickCounter = 0;
-            } else {
-                currentEnemyName = "Searching...";
-            }
-        });
+        ClientTickEvents.END_CLIENT_TICK.register(this::onTick);
     }
 
-    private PlayerEntity getNearestEnemy(net.minecraft.client.MinecraftClient client) {
+    private void onTick(MinecraftClient client) {
+        while (toggleKey.wasPressed()) {
+            active = !active;
+            if (client.player != null) {
+                client.player.sendMessage(
+                        Text.literal("§6[AutoSafeAnchor] §fMod is now " + (active ? "§aENABLED" : "§cDISABLED")),
+                        true
+                );
+            }
+            if (!active) reset(client);
+        }
+
+        if (!active || client.player == null || client.world == null || client.interactionManager == null) {
+            targetName = "None";
+            return;
+        }
+
+        if (step >= 0) {
+            processSequence(client);
+            return;
+        }
+
+        PlayerEntity enemy = getNearestEnemy(client);
+        if (enemy == null) {
+            targetName = "Searching...";
+            return;
+        }
+
+        originalSlot = client.player.getInventory().selectedSlot;
+        targetAnchorPos = enemy.getBlockPos();
+        targetName = enemy.getName().getString();
+        step = 0;
+    }
+
+    private PlayerEntity getNearestEnemy(MinecraftClient client) {
         PlayerEntity nearest = null;
-        float minDistance = 9.0F;
+        double nearestDistance = RANGE;
+
         for (PlayerEntity player : client.world.getPlayers()) {
-            if (player != client.player) {
-                float dist = client.player.distanceTo(player);
-                if (dist <= minDistance) {
-                    minDistance = dist;
-                    nearest = player;
-                }
+            if (player == client.player || player.isSpectator() || !player.isAlive()) continue;
+
+            double distance = client.player.squaredDistanceTo(player);
+            if (distance <= nearestDistance * nearestDistance) {
+                nearestDistance = Math.sqrt(distance);
+                nearest = player;
             }
         }
         return nearest;
     }
 
-    private void processAnchorSequence(net.minecraft.client.MinecraftClient client) {
-        if (targetAnchorPos == null) {
-            resetSequence(client);
+    private void processSequence(MinecraftClient client) {
+        if (targetAnchorPos == null || client.player == null) {
+            reset(client);
             return;
         }
 
-        BlockPos playerBasePos = client.player.getBlockPos();
-
-        switch (executionStep) {
-            case 0: // Step 1: Place Glowstone Protection block above player
-                int glowstoneSlot1 = findItem(client, Items.GLOWSTONE);
-                if (glowstoneSlot1 == -1) {
-                    resetSequence(client);
+        switch (step) {
+            case 0 -> {
+                // Place the glowstone only in an open block above the player.
+                int slot = findHotbarItem(client, Items.GLOWSTONE);
+                if (slot < 0) {
+                    reset(client);
                     return;
                 }
-                client.player.getInventory().selectedSlot = glowstoneSlot1;
-                BlockPos protPos = playerBasePos.up(2);
-                BlockHitResult protHit = new BlockHitResult(
-                    new Vec3d(protPos.getX() + 0.5, protPos.getY(), protPos.getZ() + 0.5),
-                    Direction.DOWN,
-                    protPos,
-                    false
-                );
-                client.interactionManager.interactBlock(client.player, Hand.MAIN_HAND, protHit);
-                executionStep = 1;
-                break;
 
-            case 1: // Step 2: Place Respawn Anchor at enemy's feet
-                int anchorSlot = findItem(client, Items.RESPAWN_ANCHOR);
-                if (anchorSlot == -1) {
-                    resetSequence(client);
+                BlockPos protectionPos = client.player.getBlockPos().up(2);
+                if (!canPlaceAt(client, protectionPos)) {
+                    reset(client);
                     return;
                 }
-                client.player.getInventory().selectedSlot = anchorSlot;
-                BlockHitResult anchorHit = new BlockHitResult(
-                    new Vec3d(targetAnchorPos.getX() + 0.5, targetAnchorPos.getY(), targetAnchorPos.getZ() + 0.5),
-                    Direction.UP,
-                    targetAnchorPos,
-                    false
-                );
-                client.interactionManager.interactBlock(client.player, Hand.MAIN_HAND, anchorHit);
-                executionStep = 2;
-                break;
 
-            case 2: // Step 3: Charge Respawn Anchor with Glowstone
-                int glowstoneSlot2 = findItem(client, Items.GLOWSTONE);
-                if (glowstoneSlot2 == -1) {
-                    resetSequence(client);
+                client.player.getInventory().selectedSlot = slot;
+                if (placeOnTopOf(client, protectionPos.down())) {
+                    step = 1;
+                } else {
+                    reset(client);
+                }
+            }
+            case 1 -> {
+                // Place the anchor at the enemy's feet by clicking the supporting block below it.
+                int slot = findHotbarItem(client, Items.RESPAWN_ANCHOR);
+                if (slot < 0 || !canPlaceAt(client, targetAnchorPos)) {
+                    reset(client);
                     return;
                 }
-                client.player.getInventory().selectedSlot = glowstoneSlot2;
-                BlockHitResult glowHit = new BlockHitResult(
-                    new Vec3d(targetAnchorPos.getX() + 0.5, targetAnchorPos.getY(), targetAnchorPos.getZ() + 0.5),
-                    Direction.UP,
-                    targetAnchorPos,
-                    false
-                );
-                client.interactionManager.interactBlock(client.player, Hand.MAIN_HAND, glowHit);
-                executionStep = 3;
-                break;
 
-            case 3: // Step 4: Explode using Slot 7 (index 6)
-                client.player.getInventory().selectedSlot = 6;
-                BlockHitResult explodeHit = new BlockHitResult(
-                    new Vec3d(targetAnchorPos.getX() + 0.5, targetAnchorPos.getY(), targetAnchorPos.getZ() + 0.5),
-                    Direction.UP,
-                    targetAnchorPos,
-                    false
-                );
-                client.interactionManager.interactBlock(client.player, Hand.MAIN_HAND, explodeHit);
-                resetSequence(client);
-                break;
+                client.player.getInventory().selectedSlot = slot;
+                if (placeOnTopOf(client, targetAnchorPos.down())) {
+                    step = 2;
+                } else {
+                    reset(client);
+                }
+            }
+            case 2 -> {
+                // Charge the anchor with glowstone.
+                int slot = findHotbarItem(client, Items.GLOWSTONE);
+                if (slot < 0) {
+                    reset(client);
+                    return;
+                }
+
+                client.player.getInventory().selectedSlot = slot;
+                if (interactBlock(client, targetAnchorPos, Direction.UP)) {
+                    step = 3;
+                } else {
+                    reset(client);
+                }
+            }
+            case 3 -> {
+                // Use the currently selected hotbar item to interact with the charged anchor.
+                // Do not assume slot 7 contains a specific item.
+                client.player.getInventory().selectedSlot = originalSlot;
+                interactBlock(client, targetAnchorPos, Direction.UP);
+                reset(client);
+            }
+            default -> reset(client);
         }
     }
 
-    private int findItem(net.minecraft.client.MinecraftClient client, net.minecraft.item.Item item) {
+    private boolean placeOnTopOf(MinecraftClient client, BlockPos supportPos) {
+        return interactBlock(client, supportPos, Direction.UP);
+    }
+
+    private boolean interactBlock(MinecraftClient client, BlockPos blockPos, Direction side) {
+        BlockHitResult hit = new BlockHitResult(
+                Vec3d.ofCenter(blockPos),
+                side,
+                blockPos,
+                false
+        );
+        client.interactionManager.interactBlock(client.player, Hand.MAIN_HAND, hit);
+        return true;
+    }
+
+    private boolean canPlaceAt(MinecraftClient client, BlockPos pos) {
+        BlockState state = client.world.getBlockState(pos);
+        return state.isAir() || state.getCollisionShape(client.world, pos).isEmpty();
+    }
+
+    private int findHotbarItem(MinecraftClient client, Item item) {
         for (int i = 0; i < 9; i++) {
             if (client.player.getInventory().getStack(i).isOf(item)) {
                 return i;
@@ -196,11 +212,12 @@ public class ExampleMod implements ClientModInitializer {
         return -1;
     }
 
-    private void resetSequence(net.minecraft.client.MinecraftClient client) {
-        client.player.getInventory().selectedSlot = originalSlot;
-        executionStep = -1;
-        tickCounter = 0;
+    private void reset(MinecraftClient client) {
+        if (client.player != null) {
+            client.player.getInventory().selectedSlot = originalSlot;
+        }
+        step = -1;
         targetAnchorPos = null;
-        currentEnemyName = "Searching...";
+        targetName = active ? "Searching..." : "None";
     }
-                               }
+}
