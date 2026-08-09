@@ -450,44 +450,39 @@ public class ExampleMod implements ClientModInitializer {
     }
 
     public boolean placeAt(MinecraftClient client, ClientPlayerEntity player, ClientWorld world, boolean anchorItem) {
-        // Never queue another interaction while one is still pending.
+        int action = anchorItem ? 3 : 1;
         if (pendingAction_ != 0) {
-            return true;
+            return pendingAction_ == action;
         }
 
         int x = anchorItem ? anchorX_ : protectX_;
         int y = anchorItem ? anchorY_ : protectY_;
         int z = anchorItem ? anchorZ_ : protectZ_;
-
-        BlockPos targetPos = new BlockPos(x, y, z);
-
-        // Only place into a block that is still replaceable.
-        if (!safeAnchorV3Replaceable(world, targetPos)) {
+        BlockPos targetPos = safeAnchorV3Pos(x, y, z);
+        if (targetPos == null || !safeAnchorV3Replaceable(world, targetPos)) {
             return false;
         }
-
         int slot = findHot(player, anchorItem ? "respawn_anchor" : "glowstone");
-        if (slot < 0) {
-            return false;
-        }
+        if (slot < 0) return false;
+
+        player.getInventory().selectedSlot = slot;
 
         double[] aim = new double[3];
         BlockHitResult placement = safeAnchorV3PlacementHit(world, x, y, z, aim);
-
         if (placement == null) {
             return false;
         }
 
-        int action = anchorItem ? 3 : 1;
-
-        // Queue exactly one action. Do not immediately retry it.
         lastActionSucceeded_ = false;
+        pendingTicks_ = 0;
         rotateTo(client, player, aim[0], aim[1], aim[2], action);
-
         return pendingAction_ == action;
     }
 
     public boolean chargeAnchor(MinecraftClient client) {
+        if (pendingAction_ != 0) {
+            return pendingAction_ == 4;
+        }
         if (client.world == null || client.player == null) return false;
         ClientWorld world = client.world;
         ClientPlayerEntity player = client.player;
@@ -500,19 +495,24 @@ public class ExampleMod implements ClientModInitializer {
 
         player.getInventory().selectedSlot = glowstone;
         lastActionSucceeded_ = false;
+        pendingTicks_ = 0;
         rotateTo(client, player, anchorX_ + 0.5, anchorY_ + 0.5, anchorZ_ + 0.5, 4);
-        return lastActionSucceeded_ || pendingAction_ == 4;
+        return pendingAction_ == 4;
     }
 
     public boolean interactAnchor(MinecraftClient client) {
+        if (pendingAction_ != 0) {
+            return pendingAction_ == 2;
+        }
         if (client.player == null) return false;
         ClientPlayerEntity player = client.player;
         Vec3d eye = player.getEyePos();
         double aimY = anchorY_ + 1.0 > eye.getY() ? anchorY_ + 0.5 : anchorY_ + 1.0;
 
         lastActionSucceeded_ = false;
+        pendingTicks_ = 0;
         rotateTo(client, player, anchorX_ + 0.5, aimY, anchorZ_ + 0.5, 2);
-        return lastActionSucceeded_ || pendingAction_ == 2;
+        return pendingAction_ == 2;
     }
 
     public void rotateTo(MinecraftClient client, ClientPlayerEntity player, double x, double y, double z, int action) {
@@ -650,6 +650,21 @@ public class ExampleMod implements ClientModInitializer {
             return;
         }
 
+        if (pendingAction_ != 0) {
+            pendingTicks_++;
+            if (pendingTicks_ > 6) {
+                pendingAction_ = 0;
+                pendingTicks_ = 0;
+                lastActionSucceeded_ = false;
+                anchorWait_ = 0;
+                chargeWait_ = 0;
+                protectionWait_ = 0;
+                protectionSent_ = false;
+            }
+        } else {
+            pendingTicks_ = 0;
+        }
+
         if (clock_ < switchDelay_) {
             clock_++;
             return;
@@ -665,43 +680,56 @@ public class ExampleMod implements ClientModInitializer {
                 }
                 break;
             case 1:
-                if (!placeAt(client, player, world, true)) {
-                    resetState();
-                } else if (pendingAction_ == 0) {
-                    step_++;
+                if (pendingAction_ == 0 && anchorWait_ == 0) {
+                    if (!placeAt(client, player, world, true)) {
+                        resetState();
+                        break;
+                    }
                 }
-                break;
-            case 2:
+                if (pendingAction_ != 0) {
+                    anchorWait_ = 0;
+                    break;
+                }
                 BlockPos anchor = safeAnchorV3Pos(anchorX_, anchorY_, anchorZ_);
                 boolean anchorVisible = anchor != null && world.getBlockState(anchor).isOf(Blocks.RESPAWN_ANCHOR);
-                int existingCharge = anchorVisible ? chargeAt(world, anchor) : -1;
                 boolean anchorSpaceOpen = anchor != null && safeAnchorV3Replaceable(world, anchor);
-
                 if (!anchorVisible) {
                     if (!anchorSpaceOpen) {
                         resetState();
                         break;
                     }
-                    if (++anchorWait_ > 0) {
+                    if (anchorWait_ == 0) {
+                        anchorWait_ = 1;
+                        break;
+                    }
+                    if (++anchorWait_ > 4) {
                         anchorWait_ = 0;
-                        step_ = 1;
+                        break;
                     }
                     break;
                 }
                 anchorWait_ = 0;
+                step_++;
+                break;
+            case 2:
+                anchor = safeAnchorV3Pos(anchorX_, anchorY_, anchorZ_);
+                anchorVisible = anchor != null && world.getBlockState(anchor).isOf(Blocks.RESPAWN_ANCHOR);
+                int existingCharge = anchorVisible ? chargeAt(world, anchor) : -1;
+                if (!anchorVisible) {
+                    step_ = 1;
+                    break;
+                }
                 if (existingCharge > 0) {
                     chargeAccepted_ = true;
                     step_++;
                     break;
                 }
-                if (pendingAction_ == 4 || chargeAccepted_) {
+                if (chargeAccepted_) {
                     step_++;
                     break;
                 }
                 if (chargeAnchor(client)) {
-                    if (pendingAction_ == 0) {
-                        step_++;
-                    }
+                    break;
                 }
                 break;
             case 3:
@@ -742,7 +770,9 @@ public class ExampleMod implements ClientModInitializer {
                     protectionSent_ = placeAt(client, player, world, false);
                     protectionWait_ = 0;
                     protectionAttempts_++;
-                } else if (++protectionWait_ > Math.min(2, protectionAttempts_)) {
+                } else if (pendingAction_ != 0) {
+                    protectionWait_ = 0;
+                } else if (!glowstonePlaced && ++protectionWait_ > Math.min(4, protectionAttempts_)) {
                     protectionSent_ = false;
                     protectionWait_ = 0;
                 }
