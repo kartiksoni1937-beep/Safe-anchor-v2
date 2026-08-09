@@ -765,10 +765,16 @@ public class ExampleMod implements ClientModInitializer {
                     resetState();
                     break;
                 }
-                if (!lastActionSucceeded_ || ++explosionWait_ > 0) {
-                    explosionWait_ = 0;
-                    resetState();
+                if (!lastActionSucceeded_) {
+                    if (++explosionWait_ > 5) {
+                        explosionWait_ = 0;
+                        resetState();
+                    }
+                    break;
                 }
+                // Successful completion: prevent automatic restart and clear state
+                disabled_ = true;
+                resetState();
                 break;
             default:
                 resetState();
