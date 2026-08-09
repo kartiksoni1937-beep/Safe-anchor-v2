@@ -37,6 +37,7 @@ public class ExampleMod implements ClientModInitializer {
     private boolean active_ = false;
     private static boolean safetySequenceActive_ = false;
     private boolean havePositions_ = false;
+    private boolean disabled_ = false;
     private int clock_ = 0;
     private int step_ = 0;
     private boolean previousZPressed_ = false;
@@ -118,6 +119,7 @@ public class ExampleMod implements ClientModInitializer {
     }
 
     public void startSequence(ClientPlayerEntity player) {
+        disabled_ = false;
         resetState();
         active_ = true;
         safetySequenceActive_ = true;
@@ -143,7 +145,7 @@ public class ExampleMod implements ClientModInitializer {
             }
         } else if (active_ && havePositions_ && step_ >= 2) {
             holdAimOnAnchor(client);
-        } else if (remoteRotationHoldTicks_ > 0) {
+        } else if (active_ && remoteRotationHoldTicks_ > 0) {
             stageSilentRotation(player, currentYaw_, currentPitch_);
             sendSyntheticLookPacket(client, player, currentYaw_, currentPitch_);
         }
@@ -326,6 +328,7 @@ public class ExampleMod implements ClientModInitializer {
         }
 
         stageSilentRotation(player, currentYaw_, currentPitch_);
+        player.setAngles(currentYaw_, currentPitch_);
         return sendSyntheticLookPacket(client, player, currentYaw_, currentPitch_);
     }
 
@@ -550,6 +553,7 @@ public class ExampleMod implements ClientModInitializer {
         smoothInitialized_ = true;
         smoothDone_ = true;
         stageSilentRotation(player, targetYaw_, targetPitch_);
+        player.setAngles(targetYaw_, targetPitch_);
         sendSyntheticLookPacket(client, player, targetYaw_, targetPitch_);
         remoteRotationHoldTicks_ = Math.max(remoteRotationHoldTicks_, 2);
     }
@@ -612,13 +616,14 @@ public class ExampleMod implements ClientModInitializer {
         if (zJustPressed) {
             if (active_) {
                 resetState();
+                disabled_ = true;
                 return;
             }
             startSequence(player);
         }
 
         if (!active_) {
-            if (hasRequiredItems(player) && targetingBlock(client)) {
+            if (!disabled_ && hasRequiredItems(player) && targetingBlock(client)) {
                 startSequence(player);
             } else {
                 smoothInitialized_ = false;
