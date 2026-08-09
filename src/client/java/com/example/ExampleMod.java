@@ -143,8 +143,6 @@ public class ExampleMod implements ClientModInitializer {
                 silentRotationPrimed_ = false;
                 runPendingAction(client);
             }
-        } else if (active_ && havePositions_ && step_ >= 2) {
-            holdAimOnAnchor(client);
         } else if (active_ && remoteRotationHoldTicks_ > 0) {
             stageSilentRotation(player, currentYaw_, currentPitch_);
             sendSyntheticLookPacket(client, player, currentYaw_, currentPitch_);
@@ -328,7 +326,9 @@ public class ExampleMod implements ClientModInitializer {
         }
 
         stageSilentRotation(player, currentYaw_, currentPitch_);
-        player.setAngles(currentYaw_, currentPitch_);
+        // Do not modify the local player's camera. Send only a synthetic
+        // look packet so the server/other clients see the adjusted aim
+        // while the local POV remains unchanged.
         return sendSyntheticLookPacket(client, player, currentYaw_, currentPitch_);
     }
 
@@ -566,7 +566,11 @@ public class ExampleMod implements ClientModInitializer {
         smoothInitialized_ = true;
         smoothDone_ = true;
         stageSilentRotation(player, targetYaw_, targetPitch_);
-        player.setAngles(targetYaw_, targetPitch_);
+        // Do not set the local player's angles here. Calling
+        // `player.setAngles` forces the client's POV and creates the
+        // persistent camera-lock behavior. We still need to inform the
+        // server of the synthetic look for the remote/anchor POV, so
+        // send the synthetic look packet but do not modify local view.
         sendSyntheticLookPacket(client, player, targetYaw_, targetPitch_);
         remoteRotationHoldTicks_ = Math.max(remoteRotationHoldTicks_, 2);
     }
