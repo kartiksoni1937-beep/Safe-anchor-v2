@@ -450,28 +450,41 @@ public class ExampleMod implements ClientModInitializer {
     }
 
     public boolean placeAt(MinecraftClient client, ClientPlayerEntity player, ClientWorld world, boolean anchorItem) {
+        // Never queue another interaction while one is still pending.
+        if (pendingAction_ != 0) {
+            return true;
+        }
+
         int x = anchorItem ? anchorX_ : protectX_;
         int y = anchorItem ? anchorY_ : protectY_;
         int z = anchorItem ? anchorZ_ : protectZ_;
-        BlockPos targetPos = safeAnchorV3Pos(x, y, z);
-        if (targetPos == null || !safeAnchorV3Replaceable(world, targetPos)) {
+
+        BlockPos targetPos = new BlockPos(x, y, z);
+
+        // Only place into a block that is still replaceable.
+        if (!safeAnchorV3Replaceable(world, targetPos)) {
             return false;
         }
-        int slot = findHot(player, anchorItem ? "respawn_anchor" : "glowstone");
-        if (slot < 0) return false;
 
-        player.getInventory().selectedSlot = slot;
+        int slot = findHot(player, anchorItem ? "respawn_anchor" : "glowstone");
+        if (slot < 0) {
+            return false;
+        }
 
         double[] aim = new double[3];
         BlockHitResult placement = safeAnchorV3PlacementHit(world, x, y, z, aim);
-        boolean accepted = false;
-        if (placement != null) {
-            int action = anchorItem ? 3 : 1;
-            lastActionSucceeded_ = false;
-            rotateTo(client, player, aim[0], aim[1], aim[2], action);
-            accepted = lastActionSucceeded_ || pendingAction_ == action;
+
+        if (placement == null) {
+            return false;
         }
-        return accepted;
+
+        int action = anchorItem ? 3 : 1;
+
+        // Queue exactly one action. Do not immediately retry it.
+        lastActionSucceeded_ = false;
+        rotateTo(client, player, aim[0], aim[1], aim[2], action);
+
+        return pendingAction_ == action;
     }
 
     public boolean chargeAnchor(MinecraftClient client) {
