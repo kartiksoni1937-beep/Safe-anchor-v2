@@ -42,6 +42,7 @@ public class ExampleMod implements ClientModInitializer {
     private int step_ = 0;
     private boolean previousZPressed_ = false;
     private int pendingAction_ = 0;
+    private boolean pendingActionSent_ = false;
     private int pendingTicks_ = 0;
     private int anchorWait_ = 0;
     private int chargeWait_ = 0;
@@ -83,6 +84,7 @@ public class ExampleMod implements ClientModInitializer {
         clock_ = 0;
         step_ = 0;
         pendingAction_ = 0;
+        pendingActionSent_ = false;
         pendingTicks_ = 0;
         anchorWait_ = 0;
         chargeWait_ = 0;
@@ -125,7 +127,7 @@ public class ExampleMod implements ClientModInitializer {
         if (client == null || client.player == null) {
             return;
         }
-        if (pendingAction_ != 0) {
+        if (pendingAction_ != 0 && !pendingActionSent_) {
             runPendingAction(client);
         }
     }
@@ -498,11 +500,11 @@ public class ExampleMod implements ClientModInitializer {
 
     public void runPendingAction(MinecraftClient client) {
         int action = pendingAction_;
-        pendingAction_ = 0;
-        pendingTicks_ = 0;
+        if (action == 0 || !havePositions_) return;
+
+        pendingActionSent_ = true;
         lastActionSucceeded_ = false;
 
-        if (action == 0 || !havePositions_) return;
 
         if (action == 1 || action == 3) {
             ClientWorld world = client.world;
@@ -607,29 +609,30 @@ public class ExampleMod implements ClientModInitializer {
                         break;
                     }
                 }
-                if (pendingAction_ != 0) {
-                    break;
-                }
                 BlockPos anchor = safeAnchorV3Pos(anchorX_, anchorY_, anchorZ_);
                 boolean anchorVisible = anchor != null && world.getBlockState(anchor).isOf(Blocks.RESPAWN_ANCHOR);
                 boolean anchorSpaceOpen = anchor != null && safeAnchorV3Replaceable(world, anchor);
-                if (!anchorVisible) {
-                    if (!anchorSpaceOpen) {
-                        resetState();
-                        break;
+                if (anchorVisible) {
+                    if (pendingAction_ == 3) {
+                        pendingAction_ = 0;
+                        pendingActionSent_ = false;
                     }
-                    if (anchorWait_ == 0) {
-                        anchorWait_ = 1;
-                        break;
-                    }
-                    if (++anchorWait_ > 8) {
-                        resetState();
-                        break;
-                    }
+                    anchorWait_ = 0;
+                    step_++;
                     break;
                 }
-                anchorWait_ = 0;
-                step_++;
+                if (!anchorSpaceOpen) {
+                    resetState();
+                    break;
+                }
+                if (anchorWait_ == 0) {
+                    anchorWait_ = 1;
+                    break;
+                }
+                if (++anchorWait_ > 8) {
+                    resetState();
+                    break;
+                }
                 break;
             case 2:
                 anchor = safeAnchorV3Pos(anchorX_, anchorY_, anchorZ_);
@@ -640,11 +643,11 @@ public class ExampleMod implements ClientModInitializer {
                     break;
                 }
                 if (existingCharge > 0) {
+                    if (pendingAction_ == 4) {
+                        pendingAction_ = 0;
+                        pendingActionSent_ = false;
+                    }
                     chargeAccepted_ = true;
-                    step_++;
-                    break;
-                }
-                if (chargeAccepted_) {
                     step_++;
                     break;
                 }
@@ -676,6 +679,10 @@ public class ExampleMod implements ClientModInitializer {
                 boolean glowstonePlaced = protection != null && world.getBlockState(protection).isOf(Blocks.GLOWSTONE);
 
                 if (glowstonePlaced) {
+                    if (pendingAction_ == 1) {
+                        pendingAction_ = 0;
+                        pendingActionSent_ = false;
+                    }
                     protectionSent_ = false;
                     protectionWait_ = 0;
                     protectionAttempts_ = 0;
@@ -701,6 +708,16 @@ public class ExampleMod implements ClientModInitializer {
                 step_++;
                 break;
             case 5:
+                if (pendingAction_ == 2) {
+                    BlockPos anchorBlock = safeAnchorV3Pos(anchorX_, anchorY_, anchorZ_);
+                    int currentCharge = anchorBlock != null ? chargeAt(world, anchorBlock) : -1;
+                    if (currentCharge < 0) {
+                        pendingAction_ = 0;
+                        pendingActionSent_ = false;
+                        step_++;
+                        break;
+                    }
+                }
                 if (!safeAnchorV3ProtectionReady(client, anchorX_, anchorY_, anchorZ_, protectX_, protectY_, protectZ_)) {
                     BlockPos anchorBlock = safeAnchorV3Pos(anchorX_, anchorY_, anchorZ_);
                     int currentCharge = anchorBlock != null ? chargeAt(world, anchorBlock) : -1;
