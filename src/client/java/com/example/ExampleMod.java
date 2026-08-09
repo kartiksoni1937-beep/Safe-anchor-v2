@@ -69,7 +69,7 @@ public class ExampleMod implements ClientModInitializer {
 
     private int switchDelay_ = 0;
     private int explosionSlot_ = 1;
-    private int range_ = 40; 
+    private int range_ = 40;
     private boolean silentRotations_ = true;
     private boolean smoothRotations_ = true;
 
@@ -143,9 +143,11 @@ public class ExampleMod implements ClientModInitializer {
                 silentRotationPrimed_ = false;
                 runPendingAction(client);
             }
-        } else if (active_ && havePositions_ && step_ >= 2) {
+        } else if (active_ && havePositions_ && remoteRotationHoldTicks_ > 0) {
+            remoteRotationHoldTicks_--;
             holdAimOnAnchor(client);
         } else if (active_ && remoteRotationHoldTicks_ > 0) {
+            remoteRotationHoldTicks_--;
             stageSilentRotation(player, currentYaw_, currentPitch_);
             sendSyntheticLookPacket(client, player, currentYaw_, currentPitch_);
         }
@@ -315,9 +317,9 @@ public class ExampleMod implements ClientModInitializer {
 
         float yawDelta = wrapDegrees(targetYaw_ - currentYaw_);
         float pitchDelta = wrapDegrees(targetPitch_ - currentPitch_);
-        float maxStep = 25.0f;
+        float maxStep = 90.0f;
 
-        if (Math.abs(yawDelta) <= 0.25f && Math.abs(pitchDelta) <= 0.25f) {
+        if (Math.abs(yawDelta) <= 0.05f && Math.abs(pitchDelta) <= 0.05f) {
             currentYaw_ = targetYaw_;
             currentPitch_ = targetPitch_;
             smoothDone_ = true;
@@ -328,7 +330,6 @@ public class ExampleMod implements ClientModInitializer {
         }
 
         stageSilentRotation(player, currentYaw_, currentPitch_);
-        player.setAngles(currentYaw_, currentPitch_);
         return sendSyntheticLookPacket(client, player, currentYaw_, currentPitch_);
     }
 
@@ -464,14 +465,13 @@ public class ExampleMod implements ClientModInitializer {
 
         double[] aim = new double[3];
         BlockHitResult placement = safeAnchorV3PlacementHit(world, x, y, z, aim);
-        boolean accepted = false;
         if (placement != null) {
             int action = anchorItem ? 3 : 1;
             lastActionSucceeded_ = false;
             rotateTo(client, player, aim[0], aim[1], aim[2], action);
-            accepted = lastActionSucceeded_ || pendingAction_ == action;
+            return pendingAction_ == action;
         }
-        return accepted;
+        return false;
     }
 
     public boolean chargeAnchor(MinecraftClient client) {
@@ -488,7 +488,7 @@ public class ExampleMod implements ClientModInitializer {
         player.getInventory().selectedSlot = glowstone;
         lastActionSucceeded_ = false;
         rotateTo(client, player, anchorX_ + 0.5, anchorY_ + 0.5, anchorZ_ + 0.5, 4);
-        return lastActionSucceeded_ || pendingAction_ == 4;
+        return pendingAction_ == 4;
     }
 
     public boolean interactAnchor(MinecraftClient client) {
@@ -499,7 +499,7 @@ public class ExampleMod implements ClientModInitializer {
 
         lastActionSucceeded_ = false;
         rotateTo(client, player, anchorX_ + 0.5, aimY, anchorZ_ + 0.5, 2);
-        return lastActionSucceeded_ || pendingAction_ == 2;
+        return pendingAction_ == 2;
     }
 
     public void rotateTo(MinecraftClient client, ClientPlayerEntity player, double x, double y, double z, int action) {
@@ -553,9 +553,8 @@ public class ExampleMod implements ClientModInitializer {
         smoothInitialized_ = true;
         smoothDone_ = true;
         stageSilentRotation(player, targetYaw_, targetPitch_);
-        player.setAngles(targetYaw_, targetPitch_);
         sendSyntheticLookPacket(client, player, targetYaw_, targetPitch_);
-        remoteRotationHoldTicks_ = Math.max(remoteRotationHoldTicks_, 2);
+        remoteRotationHoldTicks_ = Math.max(remoteRotationHoldTicks_, 1);
     }
 
     public void runPendingAction(MinecraftClient client) {
@@ -597,6 +596,15 @@ public class ExampleMod implements ClientModInitializer {
         if (lastActionSucceeded_) {
             remoteFocus_ = (action == 1) ? 1 : 0;
             holdAimOnAnchor(client);
+            if (action == 3) {
+                step_ = 2;
+            } else if (action == 4) {
+                step_ = 3;
+            } else if (action == 1) {
+                step_ = 4;
+            } else if (action == 2) {
+                step_ = 6;
+            }
         }
     }
 
@@ -654,7 +662,7 @@ public class ExampleMod implements ClientModInitializer {
             case 1:
                 if (!placeAt(client, player, world, true)) {
                     resetState();
-                } else {
+                } else if (pendingAction_ == 0) {
                     step_++;
                 }
                 break;
@@ -686,7 +694,9 @@ public class ExampleMod implements ClientModInitializer {
                     break;
                 }
                 if (chargeAnchor(client)) {
-                    step_++;
+                    if (pendingAction_ == 0) {
+                        step_++;
+                    }
                 }
                 break;
             case 3:
@@ -727,7 +737,7 @@ public class ExampleMod implements ClientModInitializer {
                     protectionSent_ = placeAt(client, player, world, false);
                     protectionWait_ = 0;
                     protectionAttempts_++;
-                } else if (++protectionWait_ > Math.min(2, protectionAttempts_)) {
+                } else if (++protectionWait_ > Math.min(1, protectionAttempts_)) {
                     protectionSent_ = false;
                     protectionWait_ = 0;
                 }
@@ -756,7 +766,9 @@ public class ExampleMod implements ClientModInitializer {
                     resetState();
                     break;
                 }
-                step_++;
+                if (pendingAction_ == 0) {
+                    step_++;
+                }
                 break;
             case 6:
                 BlockPos finalAnchor = safeAnchorV3Pos(anchorX_, anchorY_, anchorZ_);
@@ -766,7 +778,7 @@ public class ExampleMod implements ClientModInitializer {
                     break;
                 }
                 if (!lastActionSucceeded_) {
-                    if (++explosionWait_ > 5) {
+                    if (++explosionWait_ > 1) {
                         explosionWait_ = 0;
                         resetState();
                     }
