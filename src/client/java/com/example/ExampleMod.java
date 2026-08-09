@@ -39,6 +39,7 @@ public class ExampleMod implements ClientModInitializer {
     private boolean havePositions_ = false;
     private int clock_ = 0;
     private int step_ = 0;
+    private boolean previousZPressed_ = false;
     private int pendingAction_ = 0;
     private int pendingTicks_ = 0;
     private int anchorWait_ = 0;
@@ -99,10 +100,21 @@ public class ExampleMod implements ClientModInitializer {
         lastActionSucceeded_ = false;
         remoteFocus_ = 0;
         remoteBobTick_ = 0;
-        if (remoteRotationHoldTicks_ <= 0) {
-            silentPovStaged_ = false;
-        }
+        remoteRotationHoldTicks_ = 0;
+        silentPovStaged_ = false;
         silentRotationPrimed_ = false;
+        smoothInitialized_ = false;
+        smoothDone_ = false;
+        targetYaw_ = 0.0f;
+        targetPitch_ = 0.0f;
+        currentYaw_ = 0.0f;
+        currentPitch_ = 0.0f;
+        anchorX_ = 0;
+        anchorY_ = 0;
+        anchorZ_ = 0;
+        protectX_ = 0;
+        protectY_ = 0;
+        protectZ_ = 0;
     }
 
     public void endTick(MinecraftClient client) {
@@ -111,8 +123,7 @@ public class ExampleMod implements ClientModInitializer {
         }
         ClientPlayerEntity player = client.player;
         if (pendingAction_ != 0) {
-            stageSilentRotation(player, targetYaw_, targetPitch_);
-            if (sendSyntheticLookPacket(client, player, targetYaw_, targetPitch_)) {
+            if (updateSmoothRotation(client, player) && smoothDone_) {
                 silentRotationPrimed_ = false;
                 runPendingAction(client);
             }
@@ -274,6 +285,34 @@ public class ExampleMod implements ClientModInitializer {
             return true;
         }
         return false;
+    }
+
+    private float wrapDegrees(float angle) {
+        angle %= 360.0f;
+        if (angle >= 180.0f) angle -= 360.0f;
+        if (angle < -180.0f) angle += 360.0f;
+        return angle;
+    }
+
+    private boolean updateSmoothRotation(MinecraftClient client, ClientPlayerEntity player) {
+        if (client == null || player == null) return false;
+
+        float yawDelta = wrapDegrees(targetYaw_ - currentYaw_);
+        float pitchDelta = wrapDegrees(targetPitch_ - currentPitch_);
+        float maxStep = 25.0f;
+
+        if (Math.abs(yawDelta) <= 0.25f && Math.abs(pitchDelta) <= 0.25f) {
+            currentYaw_ = targetYaw_;
+            currentPitch_ = targetPitch_;
+            smoothDone_ = true;
+        } else {
+            currentYaw_ += Math.signum(yawDelta) * Math.min(Math.abs(yawDelta), maxStep);
+            currentPitch_ += Math.signum(pitchDelta) * Math.min(Math.abs(pitchDelta), maxStep);
+            smoothDone_ = false;
+        }
+
+        stageSilentRotation(player, currentYaw_, currentPitch_);
+        return sendSyntheticLookPacket(client, player, currentYaw_, currentPitch_);
     }
 
     private boolean targetingBlock(MinecraftClient client) {
@@ -456,14 +495,14 @@ public class ExampleMod implements ClientModInitializer {
         targetYaw_ = (float) (Math.atan2(dz, dx) * 180.0 / Math.PI - 90.0);
         targetPitch_ = (float) (-Math.atan2(dy, Math.sqrt(dx * dx + dz * dz)) * 180.0 / Math.PI);
 
-        currentYaw_ = targetYaw_;
-        currentPitch_ = targetPitch_;
+        currentYaw_ = player.getYaw();
+        currentPitch_ = player.getPitch();
         pendingTicks_ = 0;
         smoothInitialized_ = true;
-        smoothDone_ = true;
-        stageSilentRotation(player, targetYaw_, targetPitch_);
+        smoothDone_ = false;
+        stageSilentRotation(player, currentYaw_, currentPitch_);
         pendingAction_ = action;
-        silentRotationPrimed_ = sendSyntheticLookPacket(client, player, targetYaw_, targetPitch_);
+        silentRotationPrimed_ = sendSyntheticLookPacket(client, player, currentYaw_, currentPitch_);
     }
 
     public void stageSilentRotation(ClientPlayerEntity player, float yaw, float pitch) {
@@ -544,7 +583,7 @@ public class ExampleMod implements ClientModInitializer {
     }
 
     public void tick(MinecraftClient client) {
-        if (client.player == null || client.world == null) {
+        if (client.player == null || client.world == null || client.player.isDead()) {
             if (active_) resetState();
             return;
         }
@@ -553,19 +592,24 @@ public class ExampleMod implements ClientModInitializer {
         ClientWorld world = client.world;
 
         boolean zPressed = GLFW.glfwGetKey(client.getWindow().getHandle(), GLFW.GLFW_KEY_Z) == GLFW.GLFW_PRESS;
-        
-        if (!active_) {
-            if (!zPressed) {
-                smoothInitialized_ = false;
-                smoothDone_ = false;
+        boolean zJustPressed = zPressed && !previousZPressed_;
+        previousZPressed_ = zPressed;
+
+        if (zJustPressed) {
+            if (active_) {
+                resetState();
                 return;
-            }
-            if (!smoothInitialized_) {
-                currentYaw_ = player.getYaw();
-                currentPitch_ = player.getPitch();
             }
             active_ = true;
             safetySequenceActive_ = true;
+            currentYaw_ = player.getYaw();
+            currentPitch_ = player.getPitch();
+            smoothInitialized_ = true;
+            smoothDone_ = false;
+        }
+
+        if (!active_) {
+            return;
         }
 
         if (!hasRequiredItems(player)) {
@@ -605,7 +649,7 @@ public class ExampleMod implements ClientModInitializer {
                         resetState();
                         break;
                     }
-                    if (++anchorWait_ > 4) {
+                    if (++anchorWait_ > 1) {
                         anchorWait_ = 0;
                         step_ = 1;
                     }
@@ -663,7 +707,7 @@ public class ExampleMod implements ClientModInitializer {
                     protectionSent_ = placeAt(client, player, world, false);
                     protectionWait_ = 0;
                     protectionAttempts_++;
-                } else if (++protectionWait_ > Math.min(8, 2 + protectionAttempts_)) {
+                } else if (++protectionWait_ > Math.min(4, 1 + protectionAttempts_)) {
                     protectionSent_ = false;
                     protectionWait_ = 0;
                 }
@@ -678,7 +722,7 @@ public class ExampleMod implements ClientModInitializer {
                     BlockPos anchorBlock = safeAnchorV3Pos(anchorX_, anchorY_, anchorZ_);
                     int currentCharge = anchorBlock != null ? chargeAt(world, anchorBlock) : -1;
                     if (currentCharge <= 0) {
-                        if (++chargeWait_ > 12) resetState();
+                        if (++chargeWait_ > 4) resetState();
                         break;
                     }
                     protectionSent_ = false;
