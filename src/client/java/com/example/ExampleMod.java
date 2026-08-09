@@ -117,6 +117,20 @@ public class ExampleMod implements ClientModInitializer {
         protectZ_ = 0;
     }
 
+    public void startSequence(ClientPlayerEntity player) {
+        resetState();
+        active_ = true;
+        safetySequenceActive_ = true;
+        if (player != null) {
+            currentYaw_ = player.getYaw();
+            currentPitch_ = player.getPitch();
+            targetYaw_ = currentYaw_;
+            targetPitch_ = currentPitch_;
+        }
+        smoothInitialized_ = true;
+        smoothDone_ = true;
+    }
+
     public void endTick(MinecraftClient client) {
         if (!silentRotations_ || client == null || client.player == null) {
             return;
@@ -600,16 +614,17 @@ public class ExampleMod implements ClientModInitializer {
                 resetState();
                 return;
             }
-            active_ = true;
-            safetySequenceActive_ = true;
-            currentYaw_ = player.getYaw();
-            currentPitch_ = player.getPitch();
-            smoothInitialized_ = true;
-            smoothDone_ = false;
+            startSequence(player);
         }
 
         if (!active_) {
-            return;
+            if (hasRequiredItems(player) && targetingBlock(client)) {
+                startSequence(player);
+            } else {
+                smoothInitialized_ = false;
+                smoothDone_ = false;
+                return;
+            }
         }
 
         if (!hasRequiredItems(player)) {
@@ -649,7 +664,7 @@ public class ExampleMod implements ClientModInitializer {
                         resetState();
                         break;
                     }
-                    if (++anchorWait_ > 1) {
+                    if (++anchorWait_ > 0) {
                         anchorWait_ = 0;
                         step_ = 1;
                     }
@@ -707,7 +722,7 @@ public class ExampleMod implements ClientModInitializer {
                     protectionSent_ = placeAt(client, player, world, false);
                     protectionWait_ = 0;
                     protectionAttempts_++;
-                } else if (++protectionWait_ > Math.min(4, 1 + protectionAttempts_)) {
+                } else if (++protectionWait_ > Math.min(2, protectionAttempts_)) {
                     protectionSent_ = false;
                     protectionWait_ = 0;
                 }
@@ -722,7 +737,7 @@ public class ExampleMod implements ClientModInitializer {
                     BlockPos anchorBlock = safeAnchorV3Pos(anchorX_, anchorY_, anchorZ_);
                     int currentCharge = anchorBlock != null ? chargeAt(world, anchorBlock) : -1;
                     if (currentCharge <= 0) {
-                        if (++chargeWait_ > 4) resetState();
+                        if (++chargeWait_ > 1) resetState();
                         break;
                     }
                     protectionSent_ = false;
@@ -745,9 +760,9 @@ public class ExampleMod implements ClientModInitializer {
                     resetState();
                     break;
                 }
-                if (!lastActionSucceeded_ || ++explosionWait_ > 3) {
+                if (!lastActionSucceeded_ || ++explosionWait_ > 0) {
                     explosionWait_ = 0;
-                    step_ = 4;
+                    resetState();
                 }
                 break;
             default:
