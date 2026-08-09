@@ -51,9 +51,6 @@ public class ExampleMod implements ClientModInitializer {
     private boolean protectionSent_ = false;
     private boolean chargeAccepted_ = false;
     private boolean lastActionSucceeded_ = false;
-    private int remoteFocus_ = 0;
-    private int remoteBobTick_ = 0;
-    private int remoteRotationHoldTicks_ = 0;
     private boolean silentPovStaged_ = false;
     private boolean silentRotationPrimed_ = false;
     private boolean smoothInitialized_ = false;
@@ -99,9 +96,6 @@ public class ExampleMod implements ClientModInitializer {
         protectionSent_ = false;
         chargeAccepted_ = false;
         lastActionSucceeded_ = false;
-        remoteFocus_ = 0;
-        remoteBobTick_ = 0;
-        remoteRotationHoldTicks_ = 0;
         silentPovStaged_ = false;
         silentRotationPrimed_ = false;
         smoothInitialized_ = false;
@@ -143,9 +137,6 @@ public class ExampleMod implements ClientModInitializer {
                 silentRotationPrimed_ = false;
                 runPendingAction(client);
             }
-        } else if (active_ && remoteRotationHoldTicks_ > 0) {
-            stageSilentRotation(player, currentYaw_, currentPitch_);
-            sendSyntheticLookPacket(client, player, currentYaw_, currentPitch_);
         }
     }
 
@@ -159,6 +150,7 @@ public class ExampleMod implements ClientModInitializer {
             var stack = inv.getStack(i);
             if (itemType.equals("respawn_anchor") && stack.isOf(Blocks.RESPAWN_ANCHOR.asItem())) return i;
             if (itemType.equals("glowstone") && stack.isOf(Items.GLOWSTONE)) return i;
+            if (itemType.equals("totem") && stack.isOf(Items.TOTEM_OF_UNDYING)) return i;
         }
         return -1;
     }
@@ -542,38 +534,6 @@ public class ExampleMod implements ClientModInitializer {
         silentPovStaged_ = Float.isFinite(yaw) && Float.isFinite(pitch);
     }
 
-    public void holdAimOnAnchor(MinecraftClient client) {
-        if (client.player == null || !havePositions_) return;
-        ClientPlayerEntity player = client.player;
-        Vec3d eye = player.getEyePos();
-
-        boolean focusProtection = remoteFocus_ == 1 && step_ >= 4;
-        double focusX = (focusProtection ? protectX_ : anchorX_) + 0.5;
-        double focusY = (focusProtection ? protectY_ : anchorY_) + 0.5 +
-                Math.sin((double) (++remoteBobTick_) * 0.65) * 0.035;
-        double focusZ = (focusProtection ? protectZ_ : anchorZ_) + 0.5;
-
-        double dx = focusX - eye.getX();
-        double dy = focusY - eye.getY();
-        double dz = focusZ - eye.getZ();
-        double horizontal = Math.sqrt(dx * dx + dz * dz);
-
-        targetYaw_ = (float) (Math.atan2(dz, dx) * 180.0 / Math.PI - 90.0);
-        targetPitch_ = (float) (-Math.atan2(dy, horizontal) * 180.0 / Math.PI);
-
-        currentYaw_ = targetYaw_;
-        currentPitch_ = targetPitch_;
-        smoothInitialized_ = true;
-        smoothDone_ = true;
-        stageSilentRotation(player, targetYaw_, targetPitch_);
-        // Do not set the local player's angles here. Calling
-        // `player.setAngles` forces the client's POV and creates the
-        // persistent camera-lock behavior. We still need to inform the
-        // server of the synthetic look for the remote/anchor POV, so
-        // send the synthetic look packet but do not modify local view.
-        sendSyntheticLookPacket(client, player, targetYaw_, targetPitch_);
-        remoteRotationHoldTicks_ = Math.max(remoteRotationHoldTicks_, 2);
-    }
 
     public void runPendingAction(MinecraftClient client) {
         int action = pendingAction_;
@@ -584,7 +544,6 @@ public class ExampleMod implements ClientModInitializer {
         lastActionSucceeded_ = false;
 
         if (action == 0 || !havePositions_) return;
-        remoteRotationHoldTicks_ = 2;
 
         if (action == 1 || action == 3) {
             ClientWorld world = client.world;
@@ -611,9 +570,9 @@ public class ExampleMod implements ClientModInitializer {
             }
         }
 
+        // Do not keep sending synthetic look packets after the action.
+        // The rotation packet used during the action itself is sufficient.
         if (lastActionSucceeded_) {
-            remoteFocus_ = (action == 1) ? 1 : 0;
-            holdAimOnAnchor(client);
         }
     }
 
@@ -706,10 +665,7 @@ public class ExampleMod implements ClientModInitializer {
                         anchorWait_ = 1;
                         break;
                     }
-                    if (++anchorWait_ > 4) {
-                        anchorWait_ = 0;
-                        break;
-                    }
+                    anchorWait_ = 0;
                     break;
                 }
                 anchorWait_ = 0;
@@ -760,7 +716,6 @@ public class ExampleMod implements ClientModInitializer {
                 boolean glowstonePlaced = protection != null && world.getBlockState(protection).isOf(Blocks.GLOWSTONE);
 
                 if (glowstonePlaced) {
-                    remoteFocus_ = 1;
                     protectionSent_ = false;
                     protectionWait_ = 0;
                     protectionAttempts_ = 0;
@@ -776,14 +731,14 @@ public class ExampleMod implements ClientModInitializer {
                     protectionAttempts_++;
                 } else if (pendingAction_ != 0) {
                     protectionWait_ = 0;
-                } else if (!glowstonePlaced && ++protectionWait_ > Math.min(4, protectionAttempts_)) {
+                } else if (!glowstonePlaced && ++protectionWait_ > 1) {
                     protectionSent_ = false;
                     protectionWait_ = 0;
                 }
                 break;
             case 4:
-                int totemSlot = 6;
-                if (!player.getInventory().getStack(totemSlot).isOf(Items.TOTEM_OF_UNDYING)) {
+                int totemSlot = findHot(player, "totem");
+                if (totemSlot < 0) {
                     resetState();
                     break;
                 }
