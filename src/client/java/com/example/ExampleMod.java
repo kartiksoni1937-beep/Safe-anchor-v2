@@ -133,9 +133,12 @@ public class ExampleMod implements ClientModInitializer {
         if (!silentRotations_ || client == null || client.player == null) {
             return;
         }
+        ClientPlayerEntity player = client.player;
         if (pendingAction_ != 0 && silentRotationPrimed_) {
-            silentRotationPrimed_ = false;
-            runPendingAction(client);
+            if (updateSmoothRotation(client, player) && smoothDone_) {
+                silentRotationPrimed_ = false;
+                runPendingAction(client);
+            }
         }
     }
 
@@ -327,6 +330,18 @@ public class ExampleMod implements ClientModInitializer {
         return client.crosshairTarget != null && client.crosshairTarget.getType() == HitResult.Type.BLOCK;
     }
 
+    private boolean isTargetRespawnAnchor(MinecraftClient client) {
+        if (client == null || client.world == null || client.crosshairTarget == null) {
+            return false;
+        }
+        if (client.crosshairTarget.getType() != HitResult.Type.BLOCK) {
+            return false;
+        }
+        BlockHitResult blockHit = (BlockHitResult) client.crosshairTarget;
+        BlockState state = client.world.getBlockState(blockHit.getBlockPos());
+        return state.isOf(Blocks.RESPAWN_ANCHOR);
+    }
+
     private boolean useHit(MinecraftClient client, BlockHitResult hit) {
         if (client.interactionManager == null || client.player == null) return false;
         ActionResult result = client.interactionManager.interactBlock(client.player, Hand.MAIN_HAND, hit);
@@ -404,6 +419,7 @@ public class ExampleMod implements ClientModInitializer {
     }
 
     public boolean acquirePositions(MinecraftClient client, ClientPlayerEntity player, ClientWorld world) {
+        if (isTargetRespawnAnchor(client)) return false;
         if (!targetingBlock(client)) return false;
         HitResult hit = client.crosshairTarget;
         if (!(hit instanceof BlockHitResult blockHit)) return false;
@@ -523,7 +539,7 @@ public class ExampleMod implements ClientModInitializer {
         smoothDone_ = false;
         stageSilentRotation(player, currentYaw_, currentPitch_);
         pendingAction_ = action;
-        silentRotationPrimed_ = sendSyntheticLookPacket(client, player, currentYaw_, currentPitch_);
+        silentRotationPrimed_ = true;
     }
 
     public void stageSilentRotation(ClientPlayerEntity player, float yaw, float pitch) {
@@ -587,6 +603,16 @@ public class ExampleMod implements ClientModInitializer {
         boolean zPressed = GLFW.glfwGetKey(client.getWindow().getHandle(), GLFW.GLFW_KEY_Z) == GLFW.GLFW_PRESS;
         boolean zJustPressed = zPressed && !previousZPressed_;
         previousZPressed_ = zPressed;
+
+        boolean lookingAtRespawnAnchor = isTargetRespawnAnchor(client);
+        if (lookingAtRespawnAnchor) {
+            if (active_) {
+                resetState();
+            }
+            smoothInitialized_ = false;
+            smoothDone_ = false;
+            return;
+        }
 
         if (zJustPressed) {
             if (active_) {
