@@ -45,6 +45,7 @@ public class ExampleMod implements ClientModInitializer {
     private int pendingTicks_ = 0;
     private int anchorWait_ = 0;
     private int chargeWait_ = 0;
+    private int chargeRetryWait_ = 0;
     private int explosionWait_ = 0;
     private int protectionWait_ = 0;
     private int protectionAttempts_ = 0;
@@ -65,7 +66,7 @@ public class ExampleMod implements ClientModInitializer {
     private int protectX_, protectY_, protectZ_;
 
     private int switchDelay_ = 0;
-    private int explosionSlot_ = 1;
+    private int explosionSlot_ = 7;
     private int range_ = 40; 
     private boolean silentRotations_ = true;
     private boolean smoothRotations_ = true;
@@ -90,6 +91,7 @@ public class ExampleMod implements ClientModInitializer {
         pendingTicks_ = 0;
         anchorWait_ = 0;
         chargeWait_ = 0;
+        chargeRetryWait_ = 0;
         explosionWait_ = 0;
         protectionWait_ = 0;
         protectionAttempts_ = 0;
@@ -131,12 +133,9 @@ public class ExampleMod implements ClientModInitializer {
         if (!silentRotations_ || client == null || client.player == null) {
             return;
         }
-        ClientPlayerEntity player = client.player;
-        if (pendingAction_ != 0) {
-            if (updateSmoothRotation(client, player) && smoothDone_) {
-                silentRotationPrimed_ = false;
-                runPendingAction(client);
-            }
+        if (pendingAction_ != 0 && silentRotationPrimed_) {
+            silentRotationPrimed_ = false;
+            runPendingAction(client);
         }
     }
 
@@ -620,12 +619,14 @@ public class ExampleMod implements ClientModInitializer {
                 pendingTicks_ = 0;
                 lastActionSucceeded_ = false;
                 anchorWait_ = 0;
-                chargeWait_ = 0;
+                chargeRetryWait_ = 0;
                 protectionWait_ = 0;
                 protectionSent_ = false;
             }
         } else {
             pendingTicks_ = 0;
+            if (anchorWait_ > 0) anchorWait_--;
+            if (chargeRetryWait_ > 0) chargeRetryWait_--;
         }
 
         if (clock_ < switchDelay_) {
@@ -643,14 +644,16 @@ public class ExampleMod implements ClientModInitializer {
                 }
                 break;
             case 1:
-                if (pendingAction_ == 0 && anchorWait_ == 0) {
+                if (pendingAction_ == 0) {
+                    if (anchorWait_ > 0) {
+                        break;
+                    }
                     if (!placeAt(client, player, world, true)) {
                         resetState();
                         break;
                     }
                 }
                 if (pendingAction_ != 0) {
-                    anchorWait_ = 0;
                     break;
                 }
                 BlockPos anchor = safeAnchorV3Pos(anchorX_, anchorY_, anchorZ_);
@@ -662,10 +665,8 @@ public class ExampleMod implements ClientModInitializer {
                         break;
                     }
                     if (anchorWait_ == 0) {
-                        anchorWait_ = 1;
-                        break;
+                        anchorWait_ = 3;
                     }
-                    anchorWait_ = 0;
                     break;
                 }
                 anchorWait_ = 0;
@@ -688,7 +689,11 @@ public class ExampleMod implements ClientModInitializer {
                     step_++;
                     break;
                 }
+                if (pendingAction_ != 0 || chargeRetryWait_ > 0) {
+                    break;
+                }
                 if (chargeAnchor(client)) {
+                    chargeRetryWait_ = 3;
                     break;
                 }
                 break;
@@ -727,13 +732,20 @@ public class ExampleMod implements ClientModInitializer {
                     acquireProtectionPosition(client, player, world);
                 } else if (!protectionSent_) {
                     protectionSent_ = placeAt(client, player, world, false);
-                    protectionWait_ = 0;
+                    if (protectionSent_) {
+                        protectionWait_ = 3;
+                    }
                     protectionAttempts_++;
                 } else if (pendingAction_ != 0) {
-                    protectionWait_ = 0;
-                } else if (!glowstonePlaced && ++protectionWait_ > 1) {
-                    protectionSent_ = false;
-                    protectionWait_ = 0;
+                    if (protectionWait_ < 3) {
+                        protectionWait_ = 3;
+                    }
+                } else if (!glowstonePlaced) {
+                    if (protectionWait_ > 0) {
+                        protectionWait_--;
+                    } else {
+                        protectionSent_ = false;
+                    }
                 }
                 break;
             case 4:
