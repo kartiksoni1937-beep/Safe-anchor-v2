@@ -46,6 +46,7 @@ public class ExampleMod implements ClientModInitializer {
     private int anchorWait_ = 0;
     private int chargeWait_ = 0;
     private int chargeRetryWait_ = 0;
+    private int actionRetryWait_ = 0;
     private int explosionWait_ = 0;
     private int protectionWait_ = 0;
     private int protectionAttempts_ = 0;
@@ -64,6 +65,10 @@ public class ExampleMod implements ClientModInitializer {
 
     private int anchorX_, anchorY_, anchorZ_;
     private int protectX_, protectY_, protectZ_;
+    private int lastAction_ = 0;
+    private int lastActionX_ = 0;
+    private int lastActionY_ = 0;
+    private int lastActionZ_ = 0;
 
     private int switchDelay_ = 0;
     private int explosionSlot_ = 7;
@@ -102,6 +107,8 @@ public class ExampleMod implements ClientModInitializer {
         silentRotationPrimed_ = false;
         smoothInitialized_ = false;
         smoothDone_ = false;
+        actionRetryWait_ = 0;
+        clearLastAction();
         targetYaw_ = 0.0f;
         targetPitch_ = 0.0f;
         currentYaw_ = 0.0f;
@@ -129,8 +136,40 @@ public class ExampleMod implements ClientModInitializer {
         smoothDone_ = true;
     }
 
+    public void cancelPendingAction() {
+        pendingAction_ = 0;
+        pendingTicks_ = 0;
+        anchorWait_ = 0;
+        chargeWait_ = 0;
+        chargeRetryWait_ = 0;
+        protectionWait_ = 0;
+        protectionAttempts_ = 0;
+        protectionSent_ = false;
+        chargeAccepted_ = false;
+        lastActionSucceeded_ = false;
+        actionRetryWait_ = 0;
+        explosionWait_ = 0;
+        silentRotationPrimed_ = false;
+        silentPovStaged_ = false;
+        smoothInitialized_ = false;
+        smoothDone_ = false;
+        havePositions_ = false;
+        step_ = 0;
+        clock_ = 0;
+        safetySequenceActive_ = false;
+        clearLastAction();
+    }
+
     public void endTick(MinecraftClient client) {
         if (!silentRotations_ || client == null || client.player == null) {
+            return;
+        }
+        if (disabled_) {
+            cancelPendingAction();
+            return;
+        }
+        if (!active_) {
+            cancelPendingAction();
             return;
         }
         ClientPlayerEntity player = client.player;
@@ -302,6 +341,24 @@ public class ExampleMod implements ClientModInitializer {
         return angle;
     }
 
+    private boolean isSameTargetAction(int action, int x, int y, int z) {
+        return action == lastAction_ && x == lastActionX_ && y == lastActionY_ && z == lastActionZ_;
+    }
+
+    private void markLastAction(int action, int x, int y, int z) {
+        lastAction_ = action;
+        lastActionX_ = x;
+        lastActionY_ = y;
+        lastActionZ_ = z;
+    }
+
+    private void clearLastAction() {
+        lastAction_ = 0;
+        lastActionX_ = 0;
+        lastActionY_ = 0;
+        lastActionZ_ = 0;
+    }
+
     private boolean updateSmoothRotation(MinecraftClient client, ClientPlayerEntity player) {
         if (client == null || player == null) return false;
 
@@ -457,14 +514,17 @@ public class ExampleMod implements ClientModInitializer {
     }
 
     public boolean placeAt(MinecraftClient client, ClientPlayerEntity player, ClientWorld world, boolean anchorItem) {
+        if (!active_ || disabled_) return false;
         int action = anchorItem ? 3 : 1;
-        if (pendingAction_ != 0) {
-            return pendingAction_ == action;
-        }
-
         int x = anchorItem ? anchorX_ : protectX_;
         int y = anchorItem ? anchorY_ : protectY_;
         int z = anchorItem ? anchorZ_ : protectZ_;
+        if (actionRetryWait_ > 0 && isSameTargetAction(action, x, y, z)) {
+            return false;
+        }
+        if (pendingAction_ != 0) {
+            return pendingAction_ == action;
+        }
         BlockPos targetPos = safeAnchorV3Pos(x, y, z);
         if (targetPos == null || !safeAnchorV3Replaceable(world, targetPos)) {
             return false;
@@ -482,11 +542,20 @@ public class ExampleMod implements ClientModInitializer {
 
         lastActionSucceeded_ = false;
         pendingTicks_ = 0;
+        markLastAction(action, x, y, z);
+        actionRetryWait_ = 3;
         rotateTo(client, player, aim[0], aim[1], aim[2], action);
         return pendingAction_ == action;
     }
 
     public boolean chargeAnchor(MinecraftClient client) {
+        if (!active_ || disabled_) return false;
+        int x = anchorX_;
+        int y = anchorY_;
+        int z = anchorZ_;
+        if (actionRetryWait_ > 0 && isSameTargetAction(4, x, y, z)) {
+            return false;
+        }
         if (pendingAction_ != 0) {
             return pendingAction_ == 4;
         }
@@ -503,11 +572,20 @@ public class ExampleMod implements ClientModInitializer {
         player.getInventory().selectedSlot = glowstone;
         lastActionSucceeded_ = false;
         pendingTicks_ = 0;
+        markLastAction(4, x, y, z);
+        actionRetryWait_ = 3;
         rotateTo(client, player, anchorX_ + 0.5, anchorY_ + 0.5, anchorZ_ + 0.5, 4);
         return pendingAction_ == 4;
     }
 
     public boolean interactAnchor(MinecraftClient client) {
+        if (!active_ || disabled_) return false;
+        int x = anchorX_;
+        int y = anchorY_;
+        int z = anchorZ_;
+        if (actionRetryWait_ > 0 && isSameTargetAction(2, x, y, z)) {
+            return false;
+        }
         if (pendingAction_ != 0) {
             return pendingAction_ == 2;
         }
@@ -518,11 +596,16 @@ public class ExampleMod implements ClientModInitializer {
 
         lastActionSucceeded_ = false;
         pendingTicks_ = 0;
+        markLastAction(2, x, y, z);
+        actionRetryWait_ = 3;
         rotateTo(client, player, anchorX_ + 0.5, aimY, anchorZ_ + 0.5, 2);
         return pendingAction_ == 2;
     }
 
     public void rotateTo(MinecraftClient client, ClientPlayerEntity player, double x, double y, double z, int action) {
+        if (!active_ || disabled_) {
+            return;
+        }
         silentRotations_ = true;
         Vec3d eye = player.getEyePos();
         double dx = x - eye.getX();
@@ -551,6 +634,10 @@ public class ExampleMod implements ClientModInitializer {
 
 
     public void runPendingAction(MinecraftClient client) {
+        if (!active_ || disabled_) {
+            cancelPendingAction();
+            return;
+        }
         int action = pendingAction_;
         pendingAction_ = 0;
         pendingTicks_ = 0;
@@ -606,9 +693,11 @@ public class ExampleMod implements ClientModInitializer {
 
         boolean lookingAtRespawnAnchor = isTargetRespawnAnchor(client);
         if (lookingAtRespawnAnchor) {
+            cancelPendingAction();
             if (active_) {
                 resetState();
             }
+            disabled_ = true;
             smoothInitialized_ = false;
             smoothDone_ = false;
             return;
@@ -621,6 +710,13 @@ public class ExampleMod implements ClientModInitializer {
                 return;
             }
             startSequence(player);
+        }
+
+        if (disabled_ && !zJustPressed) {
+            cancelPendingAction();
+            smoothInitialized_ = false;
+            smoothDone_ = false;
+            return;
         }
 
         if (!active_) {
@@ -648,11 +744,13 @@ public class ExampleMod implements ClientModInitializer {
                 chargeRetryWait_ = 0;
                 protectionWait_ = 0;
                 protectionSent_ = false;
+                actionRetryWait_ = Math.max(actionRetryWait_, 3);
             }
         } else {
             pendingTicks_ = 0;
             if (anchorWait_ > 0) anchorWait_--;
             if (chargeRetryWait_ > 0) chargeRetryWait_--;
+            if (actionRetryWait_ > 0) actionRetryWait_--;
         }
 
         if (clock_ < switchDelay_) {
