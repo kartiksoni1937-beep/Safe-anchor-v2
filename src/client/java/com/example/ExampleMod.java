@@ -126,6 +126,7 @@ public class ExampleMod implements ClientModInitializer {
         resetState();
         active_ = true;
         safetySequenceActive_ = true;
+        LOGGER.info("startSequence: started sequence, player=" + (player != null ? player.getName().getString() : "null"));
         if (player != null) {
             currentYaw_ = player.getYaw();
             currentPitch_ = player.getPitch();
@@ -137,6 +138,7 @@ public class ExampleMod implements ClientModInitializer {
     }
 
     public void cancelPendingAction() {
+        LOGGER.info("cancelPendingAction: clearing pending state (step=" + step_ + ", pendingAction=" + pendingAction_ + ")");
         pendingAction_ = 0;
         pendingTicks_ = 0;
         anchorWait_ = 0;
@@ -636,6 +638,7 @@ public class ExampleMod implements ClientModInitializer {
     public void runPendingAction(MinecraftClient client) {
         if (!active_ || disabled_) {
             cancelPendingAction();
+            LOGGER.info("runPendingAction: aborted because active=" + active_ + " disabled=" + disabled_);
             return;
         }
         int action = pendingAction_;
@@ -644,6 +647,7 @@ public class ExampleMod implements ClientModInitializer {
         silentPovStaged_ = silentRotations_;
         silentRotationPrimed_ = false;
         lastActionSucceeded_ = false;
+        LOGGER.info("runPendingAction: executing action=" + action + " step=" + step_ + " anchor=[" + anchorX_ + "," + anchorY_ + "," + anchorZ_ + "] protect=[" + protectX_ + "," + protectY_ + "," + protectZ_ + "]");
 
         if (action == 0 || !havePositions_) return;
 
@@ -675,6 +679,9 @@ public class ExampleMod implements ClientModInitializer {
         // Do not keep sending synthetic look packets after the action.
         // The rotation packet used during the action itself is sufficient.
         if (lastActionSucceeded_) {
+            LOGGER.info("runPendingAction: action succeeded=" + action);
+        } else {
+            LOGGER.info("runPendingAction: action failed=" + action);
         }
     }
 
@@ -692,11 +699,8 @@ public class ExampleMod implements ClientModInitializer {
         previousZPressed_ = zPressed;
 
         boolean lookingAtRespawnAnchor = isTargetRespawnAnchor(client);
-        if (lookingAtRespawnAnchor) {
+        if (lookingAtRespawnAnchor && !active_) {
             cancelPendingAction();
-            if (active_) {
-                resetState();
-            }
             disabled_ = true;
             smoothInitialized_ = false;
             smoothDone_ = false;
